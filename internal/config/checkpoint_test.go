@@ -50,7 +50,7 @@ func TestCheckpointRejectsIncompleteOrMismatchedConfiguration(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			w := checkpointWorkflow(t)
 			change(&w)
-			if w.validateCheckpoint() == nil {
+			if w.ValidateCheckpoint() == nil {
 				t.Fatal("unsafe checkpoint accepted")
 			}
 		})
@@ -59,7 +59,7 @@ func TestCheckpointRejectsIncompleteOrMismatchedConfiguration(t *testing.T) {
 
 func TestCheckpointSameMillisecondHasNoLexicalWatermark(t *testing.T) {
 	w := checkpointWorkflow(t)
-	if err := w.validateCheckpoint(); err != nil {
+	if err := w.ValidateCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 	c := w.AdmissionCheckpoint
@@ -120,7 +120,7 @@ func TestPrototypeExportFixture(t *testing.T) {
 	}
 	w := checkpointWorkflow(t)
 	w.AdmissionCheckpoint = &cp
-	if err = w.validateCheckpoint(); err != nil {
+	if err = w.ValidateCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 	if !cp.Allows(strings.Repeat("a", 26), 200) || cp.Allows(strings.Repeat("p", 26), 200) {

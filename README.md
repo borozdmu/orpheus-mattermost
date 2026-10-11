@@ -68,7 +68,7 @@ Suggested workflow text:
 > using an atomic rename, and then send your final answer. The connector
 > attaches outbox files to the last answer of the run.
 
-Binary commands: `serve`, `validate`, and `healthcheck`. The embedded Python
+Binary commands: `serve`, `validate`, `healthcheck`, and `export-checkpoint`. The embedded Python
 script handles `prepare-input`, `export-output`, and SDK `import-input`.
 File hooks upload files but never create Mattermost posts.
 
@@ -77,7 +77,8 @@ File hooks upload files but never create Mattermost posts.
 A disabled workflow can import an [admission checkpoint](docs/ADMISSION_CHECKPOINT.md)
 from a drained previous transport. It preserves consumed IDs and the inclusive
 replay boundary, and starts a clean ownership period. This is not a switch
-command or a live handover acceptance.
+command or a live handover acceptance. The read-only `export-checkpoint` command
+verifies native history and delivery receipts for a return to the previous transport.
 
 ## Development
 
