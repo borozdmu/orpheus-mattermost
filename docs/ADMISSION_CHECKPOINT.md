@@ -75,8 +75,10 @@ Every expected answer/status/progress part and attachment must have an unchanged
 unique receipt. Multipart rejections require every part and their trigger IDs.
 Edited/deleted/duplicate receipts, missing files, unfinished input, incomplete
 history, unknown contracts, and oversized checkpoints fail without returning a
-partial checkpoint. Separately repaired attachments currently fail closed and
-require a later repair-aware verifier; export never repairs or republishes them.
+partial checkpoint. Separately repaired attachments currently fail closed.
+Support for them is deferred rather than a prerequisite for the initial pilot;
+if encountered during return, they require a separate review. Export never
+repairs or republishes them.
 
 The result unions the imported consumed IDs with native accepted/rejected IDs.
 It deliberately retains the original replay time: draining can leave older
