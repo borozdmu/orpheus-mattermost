@@ -90,3 +90,12 @@ cross-service snapshot transaction. The Box operator must prevent concurrent
 writers and settle unknown admissions before calling it. Prototype import stores
 the result while remaining draining; activation, a clean context boundary and
 the durable ownership journal are separate unfinished handover steps.
+
+A further evidence limit applies to rejection-only threads: if their sole receipt
+has already disappeared from Mattermost's readable history, there is no Orpheus
+record from which this command can reconstruct its trigger IDs. Such a request
+is indistinguishable from an unaccepted mention. Live handover therefore also
+requires durable evidence of pre-admission decisions or an independently verified
+accounting of those requests. Current export output alone is not sufficient for
+that acceptance; an ownership lock by itself does not solve historical evidence
+loss.
