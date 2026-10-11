@@ -88,8 +88,12 @@ prototype's staged return import.
 This is evidence collection, not a stop/ownership proof. Remote APIs have no
 cross-service snapshot transaction. The Box operator must prevent concurrent
 writers and settle unknown admissions before calling it. Prototype import stores
-the result while remaining draining; activation, a clean context boundary and
-the durable ownership journal are separate unfinished handover steps.
+the result while remaining draining. Activation with a clean context boundary
+and verification of stopped services are separate handover steps. The pilot uses
+a manual procedure: drain, stop the source and its automatic startup, transfer
+the checkpoint, activate and start only the target. No separate ownership journal
+is required. After an uncertain result, inspect actual service and checkpoint
+state before continuing; do not blindly repeat a start or launch the other path.
 
 A further evidence limit applies to rejection-only threads: if their sole receipt
 has already disappeared from Mattermost's readable history, there is no Orpheus
