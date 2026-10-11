@@ -349,6 +349,9 @@ func (e *Engine) Thread(ctx context.Context, w config.Workflow, key conversation
 }
 
 func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversation.Key, channel mattermost.Channel, inScope bool, snapshot conversation.Snapshot) error {
+	if checkpoint := w.AdmissionCheckpoint; checkpoint != nil && (checkpoint.ChannelID != key.Channel || checkpoint.BotID != e.Bot.ID) {
+		return errors.New("admission checkpoint binding mismatch")
+	}
 	current, run, err := active(snapshot)
 	if err != nil {
 		return err
@@ -403,6 +406,9 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 		return nil
 	}
 	if frozen, ok := e.get(key); ok {
+		if w.AdmissionCheckpoint != nil && frozen.Workflow.EffectiveRevision != w.EffectiveRevision {
+			return errors.New("pending admission belongs to a previous ownership period")
+		}
 		if accepted(frozen, snapshot) {
 			e.clear(key)
 		} else {
@@ -491,7 +497,13 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 		}
 	}
 	if run == nil && w.Access == nil {
-		if t, body, pred, ok := transfer(snapshot); ok {
+		transferSnapshot := snapshot
+		if w.AdmissionCheckpoint != nil {
+			transferSnapshot.Sessions = slices.DeleteFunc(slices.Clone(snapshot.Sessions), func(s conversation.Session) bool {
+				return s.Revision != w.EffectiveRevision
+			})
+		}
+		if t, body, pred, ok := transfer(transferSnapshot); ok {
 			env = t
 			env.Revision = w.EffectiveRevision
 			messages = body

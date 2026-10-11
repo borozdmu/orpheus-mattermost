@@ -57,6 +57,8 @@ type Access struct {
 	BotID         string `yaml:"bot_id"`
 }
 type Workflow struct {
+	AdmissionCheckpoint *AdmissionCheckpoint `yaml:"admission_checkpoint" json:"admission_checkpoint,omitzero"`
+
 	Access                *Access   `yaml:"access_context" json:"access_context,omitzero"`
 	Mattermost            Endpoint  `yaml:"mattermost"`
 	ID                    string    `yaml:"id"`
@@ -343,6 +345,9 @@ func (c *Config) validate() error {
 			if len(w.Services) == 0 || len(w.IncludeIDs) == 0 || !w.PrivateChannels || w.DirectMessages || w.GroupMessages || !*w.StartOnMention || *w.Links.Enabled {
 				return errors.New("protected workflows require services, explicit private channels, mentions and disabled link expansion")
 			}
+		}
+		if err := w.validateCheckpoint(); err != nil {
+			return err
 		}
 		// Runtime polling and drain switches do not invalidate a retained sandbox.
 		semantic := *w

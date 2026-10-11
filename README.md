@@ -72,6 +72,13 @@ Binary commands: `serve`, `validate`, and `healthcheck`. The embedded Python
 script handles `prepare-input`, `export-output`, and SDK `import-input`.
 File hooks upload files but never create Mattermost posts.
 
+## Transferring a channel
+
+A disabled workflow can import an [admission checkpoint](docs/ADMISSION_CHECKPOINT.md)
+from a drained previous transport. It preserves consumed IDs and the inclusive
+replay boundary, and starts a clean ownership period. This is not a switch
+command or a live handover acceptance.
+
 ## Development
 
 Docker, Compose, and Make are required. Go 1.27 and pinned checking tools run in
