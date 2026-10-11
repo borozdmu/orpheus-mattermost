@@ -48,7 +48,16 @@ type Links struct {
 	MaxLinks int   `yaml:"max_links"`
 	MaxPosts int   `yaml:"max_posts"`
 }
+
+// Access binds a protected workflow to the provider's registered integration.
+type Access struct {
+	Namespace     string `yaml:"namespace"`
+	AgentID       string `yaml:"agent_id"`
+	PolicySpaceID string `yaml:"policy_space_id"`
+	BotID         string `yaml:"bot_id"`
+}
 type Workflow struct {
+	Access                *Access   `yaml:"access_context" json:"access_context,omitzero"`
 	Mattermost            Endpoint  `yaml:"mattermost"`
 	ID                    string    `yaml:"id"`
 	Revision              string    `yaml:"revision"`
@@ -93,6 +102,7 @@ type Config struct {
 }
 
 var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,79}$`)
+var accessNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_.-]{0,127}$`)
 var envPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var servicePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 var idPattern = regexp.MustCompile(`^[a-z0-9]{26}$`)
@@ -325,6 +335,14 @@ func (c *Config) validate() error {
 		}
 		if w.Links.MaxLinks < 1 || w.Links.MaxLinks > 5 || w.Links.MaxPosts < 2 || w.Links.MaxPosts > 20 {
 			return errors.New("invalid link expansion limits")
+		}
+		if a := w.Access; a != nil {
+			if !accessNamePattern.MatchString(a.Namespace) || !accessNamePattern.MatchString(a.AgentID) || !accessNamePattern.MatchString(a.PolicySpaceID) || !ValidID(a.BotID) {
+				return errors.New("invalid protected workflow binding")
+			}
+			if len(w.Services) == 0 || len(w.IncludeIDs) == 0 || !w.PrivateChannels || w.DirectMessages || w.GroupMessages || !*w.StartOnMention || *w.Links.Enabled {
+				return errors.New("protected workflows require services, explicit private channels, mentions and disabled link expansion")
+			}
 		}
 		// Runtime polling and drain switches do not invalidate a retained sandbox.
 		semantic := *w

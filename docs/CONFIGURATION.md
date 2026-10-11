@@ -254,3 +254,60 @@ Full REST replay costs grow with history since `reconcile_from`. Concurrent writ
 can shift pages; the next full scan catches omissions, while admission keys
 suppress duplicates. Channel replay uses page/per-page, not `since` or `before`,
 which can truncate results or lose posts sharing a timestamp at a page boundary.
+
+## Protected service context (experimental fork)
+
+A workflow can bind a private channel to provider-backed services:
+
+```yaml
+services: [protected-data]
+private_channels: true
+direct_messages: false
+group_messages: false
+include_ids: [cccccccccccccccccccccccccc]
+start_on_mention: true
+link_expansion:
+  enabled: false
+access_context:
+  namespace: mattermost:example
+  agent_id: assistant
+  policy_space_id: pilot
+  bot_id: bbbbbbbbbbbbbbbbbbbbbbbbbb
+```
+
+These are server-controlled integration identifiers, not model instructions.
+The configured bot must match `/users/me`. The provider validates the binding
+and its own data permissions. Bot choice and product instructions remain in the
+workflow. An unconfigured workflow retains its existing behavior.
+
+After a run slot is reserved, the connector reads the private channel and all
+membership pages, including admins and bots. It checks counts before and after
+pagination and rejects missing, duplicate, invalid or incomplete results.
+Mattermost has no transactional membership snapshot: equal-count replacements
+concurrent with pagination cannot be detected by counts alone. Live acceptance
+must verify the server's membership semantics. Public channels and DMs are not
+supported by this pilot. The observation must complete in less than 60 seconds.
+See the [Mattermost membership API](https://github.com/mattermost/mattermost/blob/master/api/v4/source/channels.yaml).
+
+The invocation UUID depends only on source, workflow, channel, root and anchor.
+Before acceptance, the existing pending input freezes the audience and context;
+accepted metadata survives process restarts. Uncertain responses are reconciled
+against accepted history before another submission. A lost, unaccepted pending
+snapshot is not reconstructed transparently: the same invocation with different
+context is rejected by the provider and needs a new mention.
+
+Active clarifications use the initial audience. Authors outside it remain
+unaccepted in Mattermost; neither their text nor files enter `BuildMessages` or
+`Sandbox.Prepare`. Every delivered item has its confirmed author in the existing
+`SendMessage.access_context.input_subjects`. Renewal and publication do not fetch
+a new audience.
+
+Only `409 service_scope_changed` rotates a reusable protected session. The new
+session keeps the invocation, but rebuilds only the frozen triggering posts.
+It does not transfer the old payload or file index. First admission and unknown
+memory provenance use the same `trigger_only` builder mode. Accepted metadata
+stores `context_start: {created_at, post_id}`; later builders filter before
+reading files, even if the boundary post has been deleted. Linked-thread
+expansion is disabled. Rejected clarifications from a finished run are not
+transferred automatically for protected workflows; a new mention is required.
+Delivery, outbox, external thread keys and the stock queue remain unchanged.
