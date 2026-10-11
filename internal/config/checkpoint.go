@@ -20,7 +20,7 @@ type AdmissionCheckpoint struct {
 	ConsumedPostIDs []string `yaml:"consumed_post_ids" json:"consumed_post_ids"`
 }
 
-func (w Workflow) validateCheckpoint() error {
+func (w Workflow) ValidateCheckpoint() error {
 	c := w.AdmissionCheckpoint
 	if c == nil {
 		return nil
@@ -31,7 +31,7 @@ func (w Workflow) validateCheckpoint() error {
 	}
 	// One checkpoint governs one explicit channel. No linked thread can bypass
 	// the imported history boundary. The epoch participates in EffectiveRevision.
-	if !slices.Equal(w.IncludeIDs, []string{c.ChannelID}) || len(w.ExcludeIDs) != 0 || w.DirectMessages || w.GroupMessages || *w.Links.Enabled || w.Since.UnixMilli() != c.ReplayFromMS || w.Since.Nanosecond()%1000000 != 0 {
+	if !slices.Equal(w.IncludeIDs, []string{c.ChannelID}) || len(w.ExcludeIDs) != 0 || w.DirectMessages || w.GroupMessages || w.Links.Enabled == nil || *w.Links.Enabled || w.Since.UnixMilli() != c.ReplayFromMS || w.Since.Nanosecond()%1000000 != 0 {
 		return errors.New("admission checkpoint requires one channel, exact replay time and disabled links")
 	}
 	if w.Access != nil && w.Access.BotID != c.BotID {

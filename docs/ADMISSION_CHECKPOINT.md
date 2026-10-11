@@ -51,3 +51,58 @@ writes; stop the previous ingress and its automatic restart; persist the period
 and checkpoint; and start exactly one new ingress. Native export, reverse import,
 crash-safe ownership transitions and live rollback still need acceptance. Do not
 activate a workflow merely because checkpoint validation succeeds.
+
+## Read-only return export
+
+After the Box owner operator has stopped admission, drained publication, resolved
+uncertain HTTP writes, and stopped the native process and automatic restart:
+
+```sh
+orpheus-mattermost export-checkpoint --workflow cxassist --epoch NEW_OPERATION_UUID
+```
+
+The selected workflow must retain its imported checkpoint and `draining: true`.
+The command loads the usual configuration and secret ENV references. It does not
+start the runtime. Its API interfaces expose only reads; it cannot submit/cancel
+runs, publish notices, or upload files. JSON appears on stdout only after the
+entire export succeeds. The operator must save that result atomically.
+
+Export walks the complete Orpheus session listing and each thread's complete
+snapshot through the existing paginated clients. It also scans Mattermost for
+pre-admission rejection receipts, including threads without an Orpheus session.
+Every run must be terminal; inputs must be delivered, with recognized metadata.
+Every expected answer/status/progress part and attachment must have an unchanged,
+unique receipt. Multipart rejections require every part and their trigger IDs.
+Edited/deleted/duplicate receipts, missing files, unfinished input, incomplete
+history, unknown contracts, and oversized checkpoints fail without returning a
+partial checkpoint. Separately repaired attachments currently fail closed.
+Support for them is deferred rather than a prerequisite for the initial pilot;
+if encountered during return, they require a separate review. Export never
+repairs or republishes them.
+
+The result unions the imported consumed IDs with native accepted/rejected IDs.
+It deliberately retains the original replay time: draining can leave older
+unaccepted mentions, so using the newest post or wall clock would lose requests.
+It contains no text, session IDs, rights, credentials or model memory. The shared
+`channel-return-checkpoint.json` fixture is checked against this exporter and the
+prototype's staged return import.
+
+This is evidence collection, not a stop/ownership proof. Remote APIs have no
+cross-service snapshot transaction. The Box operator must prevent concurrent
+writers and settle unknown admissions before calling it. Prototype import stores
+the result while remaining draining. Activation with a clean context boundary
+and verification of stopped services are separate handover steps. The pilot uses
+a manual procedure: drain, stop the source and its automatic startup, transfer
+the checkpoint, activate and start only the target. No separate ownership journal
+is required. After an uncertain result, inspect actual service and checkpoint
+state before continuing; do not blindly repeat a start or launch the other path.
+
+A further evidence limit applies to rejection-only threads: if their sole receipt
+has already disappeared from Mattermost's readable history, there is no Orpheus
+record from which this command can reconstruct its trigger IDs. Such a request
+is indistinguishable from an unaccepted mention unless its ID is already in the
+imported checkpoint. The pilot accepts this replay limitation: an available source
+post within the replay range may be reconsidered under normal admission checks.
+No separate ledger or reconstruction of lost pre-admission rejections is required
+for handover. Existing verifiable rejection receipts still contribute consumed IDs;
+this policy does not relax verification of accepted runs or delivery evidence.

@@ -346,7 +346,7 @@ func (c *Config) validate() error {
 				return errors.New("protected workflows require services, explicit private channels, mentions and disabled link expansion")
 			}
 		}
-		if err := w.validateCheckpoint(); err != nil {
+		if err := w.ValidateCheckpoint(); err != nil {
 			return err
 		}
 		// Runtime polling and drain switches do not invalidate a retained sandbox.
