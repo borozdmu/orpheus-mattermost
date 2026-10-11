@@ -220,6 +220,17 @@ const maxInputMessages = 256
 
 // BuildMessages selects a deterministic prefix of triggers as separate items.
 func (b Builder) BuildMessages(ctx context.Context, key Key, channel mattermost.Channel, posts []mattermost.Post, snapshot Snapshot, initial bool, now time.Time) (Envelope, []InputMessage, error) {
+	if boundary := b.Workflow.AdmissionCheckpoint; boundary != nil {
+		if boundary.ChannelID != key.Channel || boundary.BotID != b.Bot.ID {
+			return Envelope{}, nil, fmt.Errorf("admission checkpoint binding mismatch")
+		}
+		posts = slices.DeleteFunc(slices.Clone(posts), func(p mattermost.Post) bool {
+			return !boundary.Allows(p.ID, p.CreateAt)
+		})
+		if initial {
+			b.TriggerOnly = true
+		}
+	}
 	if b.ContextStart != nil {
 		posts = slices.DeleteFunc(slices.Clone(posts), func(p mattermost.Post) bool {
 			return p.CreateAt < b.ContextStart.CreatedAt || p.CreateAt == b.ContextStart.CreatedAt && p.ID < b.ContextStart.PostID
