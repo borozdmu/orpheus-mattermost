@@ -94,8 +94,9 @@ the durable ownership journal are separate unfinished handover steps.
 A further evidence limit applies to rejection-only threads: if their sole receipt
 has already disappeared from Mattermost's readable history, there is no Orpheus
 record from which this command can reconstruct its trigger IDs. Such a request
-is indistinguishable from an unaccepted mention. Live handover therefore also
-requires durable evidence of pre-admission decisions or an independently verified
-accounting of those requests. Current export output alone is not sufficient for
-that acceptance; an ownership lock by itself does not solve historical evidence
-loss.
+is indistinguishable from an unaccepted mention unless its ID is already in the
+imported checkpoint. The pilot accepts this replay limitation: an available source
+post within the replay range may be reconsidered under normal admission checks.
+No separate ledger or reconstruction of lost pre-admission rejections is required
+for handover. Existing verifiable rejection receipts still contribute consumed IDs;
+this policy does not relax verification of accepted runs or delivery evidence.
