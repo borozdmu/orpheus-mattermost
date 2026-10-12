@@ -49,13 +49,6 @@ type Links struct {
 	MaxPosts int   `yaml:"max_posts"`
 }
 
-// Access binds a protected workflow to the provider's registered integration.
-type Access struct {
-	Namespace     string `yaml:"namespace"`
-	AgentID       string `yaml:"agent_id"`
-	PolicySpaceID string `yaml:"policy_space_id"`
-	BotID         string `yaml:"bot_id"`
-}
 type Workflow struct {
 	AdmissionCheckpoint *AdmissionCheckpoint `yaml:"admission_checkpoint" json:"admission_checkpoint,omitzero"`
 
@@ -339,8 +332,8 @@ func (c *Config) validate() error {
 			return errors.New("invalid link expansion limits")
 		}
 		if a := w.Access; a != nil {
-			if !accessNamePattern.MatchString(a.Namespace) || !accessNamePattern.MatchString(a.AgentID) || !accessNamePattern.MatchString(a.PolicySpaceID) || !ValidID(a.BotID) {
-				return errors.New("invalid protected workflow binding")
+			if err := a.Validate(); err != nil {
+				return err
 			}
 			if len(w.Services) == 0 || len(w.IncludeIDs) == 0 || !w.PrivateChannels || w.DirectMessages || w.GroupMessages || !*w.StartOnMention || *w.Links.Enabled {
 				return errors.New("protected workflows require services, explicit private channels, mentions and disabled link expansion")
