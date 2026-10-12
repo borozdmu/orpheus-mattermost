@@ -71,6 +71,7 @@ func (k Key) Invocation(anchor string) uuid.UUID {
 
 type Envelope struct {
 	AccessContext *api.AccessContext  `json:"access_context,omitzero"`
+	AccessProof   *AccessProof        `json:"access_proof,omitzero"`
 	ContextStart  *ContextStart       `json:"context_start,omitzero"`
 	InputSubjects []api.AccessSubject `json:"input_subjects,omitzero"`
 	Schema        int                 `json:"schema"`

@@ -18,6 +18,7 @@ import (
 	"github.com/orpheus-agents/orpheus-mattermost/internal/delivery"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/mattermost"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/orpheus"
+	api "github.com/orpheus-agents/orpheus/client"
 )
 
 type API interface {
@@ -477,10 +478,12 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 				return provenanceErr
 			}
 			runContract = previous
-			audience := previous.AccessContext.ScopeContext.AudienceSubjects
+			allowed := *previous.AccessContext.AllowedInputSubjects
 			// Filter before BuildMessages: excluded authors' files must never
 			// reach the running sandbox. They stay unaccepted in Mattermost.
-			posts = slices.DeleteFunc(posts, func(post mattermost.Post) bool { return !slices.Contains(audience, post.UserID) })
+			posts = slices.DeleteFunc(posts, func(post mattermost.Post) bool {
+				return !slices.Contains(allowed, api.AccessSubject{Namespace: w.Access.Namespace, ID: post.UserID})
+			})
 		} else if provenanceErr != nil {
 			initial = true
 		}
@@ -606,18 +609,20 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 		}
 		if run != nil {
 			frozen.Envelope.AccessContext = runContract.AccessContext
+			frozen.Envelope.AccessProof = runContract.AccessProof
 			for _, message := range messages {
-				if message.Subject.Namespace != w.Access.Namespace || !slices.Contains(runContract.AccessContext.ScopeContext.AudienceSubjects, message.Subject.ID) {
+				if !slices.Contains(*runContract.AccessContext.AllowedInputSubjects, message.Subject) {
 					return errors.New("unconfirmed input author")
 				}
 				frozen.Envelope.InputSubjects = append(frozen.Envelope.InputSubjects, message.Subject)
 			}
 		} else {
-			access, err := e.admission(ctx, w, key, env, posts)
+			access, proof, err := e.admission(ctx, w, key, env, posts)
 			if err != nil {
 				return err
 			}
 			frozen.Envelope.AccessContext = access
+			frozen.Envelope.AccessProof = proof
 		}
 	}
 	e.set(key, frozen)

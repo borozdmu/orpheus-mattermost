@@ -270,9 +270,15 @@ link_expansion:
   enabled: false
 access_context:
   namespace: mattermost:example
-  agent_id: assistant
-  policy_space_id: pilot
   bot_id: bbbbbbbbbbbbbbbbbbbbbbbbbb
+  scope_context:
+    workspace: pilot
+  identity_projection:
+    actor_field: requester
+    audience_field: readers
+    subjects:
+      hhhhhhhhhhhhhhhhhhhhhhhhhh: 42
+      nnnnnnnnnnnnnnnnnnnnnnnnnn: 77
 ```
 
 These are server-controlled integration identifiers, not model instructions.
@@ -280,9 +286,39 @@ The configured bot must match `/users/me`. The provider validates the binding
 and its own data permissions. Bot choice and product instructions remain in the
 workflow. An unconfigured workflow retains its existing behavior.
 
+`scope_context` is a static JSON object expressed in YAML. `identity_projection`
+adds the configured actor field and reader array using explicit source-user
+mappings. The field names and service identities belong to the integration;
+the connector has no provider-specific schema. For the example above, a request
+from `hhhh...` with both mapped users present sends this opaque scope:
+
+```json
+{"workspace":"pilot","requester":42,"readers":[42,77]}
+```
+
+Mapped identities must be distinct nonempty strings (up to 128 UTF-8 bytes) or
+canonical decimal integers (up to 128 characters). Integer identity values do
+not pass through floating-point conversion. The provider validates its own ID
+range and data policy. Booleans, null, arrays, objects and fractions are not
+identities. A projection field cannot overlap the static context. Static context
+is limited to 64 fields and 16 KiB; mappings are limited to 4,096 source users.
+A missing mapping fails admission. Multiple source users cannot share one
+service identity. The authenticated execution bot is the only excluded service
+reader and must not appear in the mapping. Other bots are rejected, even if
+mapped. No role or display-name fallback is used.
+
+The full confirmed Mattermost audience, including the execution bot, remains
+in a separate `allowed_input_subjects` list of namespaced source identities.
+The connector stores `access_proof` in its message metadata: the frozen source
+audience and a digest of the projection configuration. Channel, root and source
+identity remain in the existing envelope. Provider scope contains none of these
+transport fields unless an integration explicitly configures such static data.
+
 After a run slot is reserved, the connector reads the private channel and all
 membership pages, including admins and bots. It checks counts before and after
-pagination and rejects missing, duplicate, invalid or incomplete results.
+pagination and rejects missing, duplicate, invalid or incomplete results. It
+confirms each mapped reader through the user API, including account state and
+bot status, before issuing credentials.
 Mattermost has no transactional membership snapshot: equal-count replacements
 concurrent with pagination cannot be detected by counts alone. Live acceptance
 must verify the server's membership semantics. Public channels and DMs are not
@@ -296,7 +332,21 @@ against accepted history before another submission. A lost, unaccepted pending
 snapshot is not reconstructed transparently: the same invocation with different
 context is rejected by the provider and needs a new mention.
 
-Active clarifications use the initial audience. Authors outside it remain
+On recovery, the connector validates the envelope binding, transport proof,
+projection digest, projected service scope and explicit input list before
+building context or preparing files. Missing legacy authority/proof, an invalid
+projection or a mismatched namespace/list blocks updates to an active run.
+The next run starts a clean session and history boundary. The connector never
+derives missing input authority from service scope. An unreadable metadata
+envelope still fails closed and requires repair.
+
+Projection configuration participates in the existing workflow revision. A
+mapping or static-context change does not reinterpret an active run: the current
+response finishes with its frozen snapshot, no new clarifications are delivered
+under the changed revision, and the next run starts clean. Frozen pending
+admission retries retain the original projection and invocation.
+
+Active clarifications use the initial explicit input list. Authors outside it remain
 unaccepted in Mattermost; neither their text nor files enter `BuildMessages` or
 `Sandbox.Prepare`. Every delivered item has its confirmed author in the existing
 `SendMessage.access_context.input_subjects`. Renewal and publication do not fetch
