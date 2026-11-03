@@ -123,3 +123,15 @@ See [acceptance testing](docs/TESTING.md) for worker crash injection, offline fa
 coverage and the 1,000-thread recovery workload. A passing local suite does not
 establish compatibility with a different template or agent profile.
 Supported limits and file-error behavior are documented in [FILES.md](docs/FILES.md).
+
+## External agent memory client
+
+A selected static service can provide `AGENT_MEMORY_URL`, `AGENT_MEMORY_KEY`,
+`AGENT_MEMORY_CLIENT_B64`, and `AGENT_MEMORY_CLIENT_SHA256`. Before each run,
+the file hook verifies the bundled client checksum and installs it as
+`.agent-memory/memory.py`, together with a private current session/run context.
+The service key remains in the selected service environment. Without these
+variables the hook behaves as before. Partial configuration or a bad checksum
+fails preparation. This does not enable or expose Mattermost history or files
+across channels; the common factual store and agent policy live outside this
+connector.
