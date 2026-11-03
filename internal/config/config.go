@@ -49,13 +49,6 @@ type Links struct {
 	MaxPosts int   `yaml:"max_posts"`
 }
 
-// Access binds a protected workflow to the provider's registered integration.
-type Access struct {
-	Namespace     string `yaml:"namespace"`
-	AgentID       string `yaml:"agent_id"`
-	PolicySpaceID string `yaml:"policy_space_id"`
-	BotID         string `yaml:"bot_id"`
-}
 type Workflow struct {
 	AdmissionCheckpoint *AdmissionCheckpoint `yaml:"admission_checkpoint" json:"admission_checkpoint,omitzero"`
 
@@ -339,10 +332,19 @@ func (c *Config) validate() error {
 			return errors.New("invalid link expansion limits")
 		}
 		if a := w.Access; a != nil {
-			if !accessNamePattern.MatchString(a.Namespace) || !accessNamePattern.MatchString(a.AgentID) || !accessNamePattern.MatchString(a.PolicySpaceID) || !ValidID(a.BotID) {
-				return errors.New("invalid protected workflow binding")
+			if a.Peer != nil && slices.Contains(w.TriggerBotIDs, a.Peer.ID) {
+				return errors.New("protected peer recipient cannot trigger runs")
 			}
-			if len(w.Services) == 0 || len(w.IncludeIDs) == 0 || !w.PrivateChannels || w.DirectMessages || w.GroupMessages || !*w.StartOnMention || *w.Links.Enabled {
+			if err := a.Validate(); err != nil {
+				return err
+			}
+			if a.ChannelOnly && (a.Peer == nil || len(w.Services) != 0 || len(w.EnvFrom) != 0 || len(w.TriggerBotIDs) != 0) {
+				return errors.New("channel-only workflows require a fixed peer and no services, harness secrets or bot triggers")
+			}
+			if a.LocalServices && (a.ChannelOnly || a.Peer == nil || len(w.Services) == 0 || len(w.EnvFrom) != 0 || len(w.TriggerBotIDs) != 0) {
+				return errors.New("local-service workflows require a fixed peer and selected services, without channel-only mode, harness secrets or bot triggers")
+			}
+			if (!a.ChannelOnly && len(w.Services) == 0) || len(w.IncludeIDs) == 0 || !w.PrivateChannels || w.DirectMessages || w.GroupMessages || !*w.StartOnMention || *w.Links.Enabled {
 				return errors.New("protected workflows require services, explicit private channels, mentions and disabled link expansion")
 			}
 		}

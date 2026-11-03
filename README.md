@@ -131,3 +131,28 @@ See [acceptance testing](docs/TESTING.md) for worker crash injection, offline fa
 coverage and the 1,000-thread recovery workload. A passing local suite does not
 establish compatibility with a different template or agent profile.
 Supported limits and file-error behavior are documented in [FILES.md](docs/FILES.md).
+
+## Temporary progress and model cost
+
+With `BOT_FEEDBACK_SINCE` set to a Unix timestamp, newly accepted runs publish a
+working post and user-facing agent progress. Confirmed temporary posts are
+removed after every final answer part has a durable receipt. A lost final create
+response leaves progress visible until REST reconciliation verifies the answer.
+Deletion checks bot, source, workflow, thread, session, run and content hash;
+modified posts, attached files and user messages are preserved. Restarting does
+not replay terminal progress. Typing is refreshed every four seconds independently
+of model events.
+
+`BOT_COST_FILE` points to a read-only JSON file with dated `fx` USD/RUB rates and
+per-million-token `models` prices (`input`, `cached`, `output`). The final message
+contains a model-cost estimate from run usage. Cached input replaces normal input;
+reasoning is included in output. Missing usage, prices or a recent exchange rate
+produce an explicit unavailable message. This is a standard short-context model
+estimate, excluding cache-write surcharges, tools, sandbox compute and taxes.
+Exchange rates are selected at run creation in Moscow time. Persisted final
+receipts freeze the footer for retries. Pre-cutover runs keep their original
+rendering, so existing immutable receipts remain valid.
+
+On hosts with exhausted Docker default address pools, set `SMOKE_SUBNET` to an
+unused explicit subnet for the temporary smoke-test network. The test removes
+only the network and containers it created.

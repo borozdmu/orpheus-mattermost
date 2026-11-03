@@ -2,6 +2,7 @@ package orpheus
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"github.com/orpheus-agents/orpheus-mattermost/internal/attachments"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/config"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/conversation"
+	api "github.com/orpheus-agents/orpheus/client"
 )
 
 func TestPaginationBeyond200Items(t *testing.T) {
@@ -182,6 +184,51 @@ func TestSubmitUsesTypedClientAndStableKey(t *testing.T) {
 	}
 	if session.Configuration.Agent.Instructions != cfg.Workflows[0].Instructions {
 		t.Fatal("connector changed workflow instructions")
+	}
+}
+func TestLocalPolicySubmitKeepsTransportCredentialsLocal(t *testing.T) {
+	for _, services := range [][]string{nil, {"kord-google"}} {
+		t.Run(fmt.Sprint(services), func(t *testing.T) {
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body struct {
+					Env               map[string]string
+					EnvFrom           []string        `json:"env_from"`
+					AccessContext     json.RawMessage `json:"access_context"`
+					AllowMultipleRuns bool            `json:"allow_multiple_runs"`
+					Configuration     struct {
+						Hooks   json.RawMessage
+						Sandbox struct {
+							EnvFrom  []string `json:"env_from"`
+							Services []string
+						}
+					}
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				if len(body.Env)+len(body.EnvFrom)+len(body.Configuration.Sandbox.EnvFrom) != 0 || body.AllowMultipleRuns || len(body.Configuration.Hooks) != 0 || len(body.AccessContext) != 0 {
+					t.Error("unexpected transport credentials, hooks, provider context or reuse")
+				}
+				if !slices.Equal(body.Configuration.Sandbox.Services, services) {
+					t.Error("selected services changed")
+				}
+				w.WriteHeader(http.StatusAccepted)
+				_ = json.NewEncoder(w).Encode(map[string]string{"session_id": uuid.NewString(), "run_id": uuid.NewString(), "message_id": uuid.NewString()})
+			}))
+			defer s.Close()
+			cfg := config.Config{MaxRequestBytes: 1 << 20}
+			cfg.Orpheus.BaseURL = s.URL
+			c, err := New(cfg, "synthetic")
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := config.Workflow{Access: &config.Access{ChannelOnly: len(services) == 0, LocalServices: len(services) > 0}, Services: services}
+			w.Mattermost.TokenEnv = "PRIVATE_BOT_TOKEN"
+			env := conversation.Envelope{Anchor: "example", AccessContext: &api.AccessContext{}}
+			if _, err = c.Submit(t.Context(), w, env, []conversation.InputMessage{{Text: "test"}}, "", "", ""); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 func TestSessionPagination(t *testing.T) {

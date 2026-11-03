@@ -21,6 +21,8 @@ var ErrConflict = errors.New("delivery receipt conflict")
 var ErrUpload = errors.New("attachment requires upload recovery")
 
 type Receipt struct {
+	Temporary     bool                   `json:"temporary,omitzero"`
+	CostFooter    string                 `json:"cost_footer,omitzero"`
 	Schema        int                    `json:"schema"`
 	Source        string                 `json:"source"`
 	Workflow      string                 `json:"workflow"`
@@ -53,6 +55,7 @@ type Publisher struct {
 	BotID           string
 	Posts           []mattermost.Post
 	SkipAttachments bool
+	BeforeCreate    func(context.Context) error
 }
 
 func (p *Publisher) Refresh(ctx context.Context) error {
@@ -252,6 +255,11 @@ func (p *Publisher) publishOne(ctx context.Context, part Part) error {
 		ids = append(ids, a.FileID)
 	}
 	key := attachments.ObjectHash([]any{part.Receipt.Source, part.Receipt.Workflow, part.Receipt.SessionID, part.Receipt.RunID, part.Receipt.MessageID, part.Receipt.Part})
+	if p.BeforeCreate != nil {
+		if err := p.BeforeCreate(ctx); err != nil {
+			return err
+		}
+	}
 	created, e := p.MM.Create(ctx, mattermost.CreatePost{ChannelID: p.Key.Channel, RootID: p.Key.Root, Message: part.Text, FileIDs: ids, PendingID: key[:26], Props: map[string]any{Property: part.Receipt}})
 	if e != nil {
 		return e

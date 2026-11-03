@@ -47,8 +47,13 @@ func TestAccessContextUsesPublicAPIAndMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := conversation.Envelope{Source: "test", Workflow: "assistant", Channel: "channel", Root: "root", Anchor: "anchor"}
-	e.AccessContext = &api.AccessContext{InvocationID: e.Key().Invocation(e.Anchor), ContextObservedAt: time.Now().UTC(), Subject: api.AccessSubject{Namespace: "mattermost:test", ID: "author"}, ScopeContext: api.AccessScopeContext{AudienceSubjects: []string{"author", "other"}, ChannelID: e.Channel, AgentID: "assistant", PolicySpaceID: "test"}}
 	e.InputSubjects = []api.AccessSubject{{Namespace: "mattermost:test", ID: "author"}, {Namespace: "mattermost:test", ID: "other"}}
+	e.AccessContext = &api.AccessContext{InvocationID: e.Key().Invocation(e.Anchor), ContextObservedAt: time.Now().UTC(), Subject: e.InputSubjects[0], ScopeContext: api.AccessScopeContext{
+		"visible_to": json.RawMessage(`[42,77]`),
+		"requester":  json.RawMessage(`42`),
+		"workspace":  json.RawMessage(`"test"`),
+	}, AllowedInputSubjects: new(e.InputSubjects)}
+	e.AccessProof = &conversation.AccessProof{AudienceSubjects: []string{"author", "other"}, ProjectionDigest: "projection-digest"}
 	messages := []conversation.InputMessage{{Text: "first"}, {Text: "second"}}
 	sid, rid := uuid.NewString(), uuid.NewString()
 	for _, target := range [][2]string{{"", ""}, {sid, ""}, {sid, rid}} {
@@ -57,7 +62,7 @@ func TestAccessContextUsesPublicAPIAndMetadata(t *testing.T) {
 		}
 	}
 	for i, b := range bodies {
-		if len(b.Messages) != 2 || b.Messages[0].Text != "first" || b.Messages[1].Text != "second" || !reflect.DeepEqual(b.Messages[1].Metadata.AccessContext, e.AccessContext) {
+		if len(b.Messages) != 2 || b.Messages[0].Text != "first" || b.Messages[1].Text != "second" || !reflect.DeepEqual(b.Messages[1].Metadata.AccessContext, e.AccessContext) || !reflect.DeepEqual(b.Messages[1].Metadata.AccessProof, e.AccessProof) {
 			t.Fatal("snapshot not persisted outside model text")
 		}
 		if i < 2 {

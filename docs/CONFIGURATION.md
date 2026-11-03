@@ -270,9 +270,15 @@ link_expansion:
   enabled: false
 access_context:
   namespace: mattermost:example
-  agent_id: assistant
-  policy_space_id: pilot
   bot_id: bbbbbbbbbbbbbbbbbbbbbbbbbb
+  scope_context:
+    workspace: pilot
+  identity_projection:
+    actor_field: requester
+    audience_field: readers
+    subjects:
+      hhhhhhhhhhhhhhhhhhhhhhhhhh: 42
+      nnnnnnnnnnnnnnnnnnnnnnnnnn: 77
 ```
 
 These are server-controlled integration identifiers, not model instructions.
@@ -280,9 +286,43 @@ The configured bot must match `/users/me`. The provider validates the binding
 and its own data permissions. Bot choice and product instructions remain in the
 workflow. An unconfigured workflow retains its existing behavior.
 
+`scope_context` is a static JSON object expressed in YAML. `identity_projection`
+adds the configured actor field and reader array using explicit source-user
+mappings. The field names and service identities belong to the integration;
+the connector has no provider-specific schema. For the example above, a request
+from `hhhh...` with both mapped users present sends this opaque scope:
+
+```json
+{"workspace":"pilot","requester":42,"readers":[42,77]}
+```
+
+Mapped identities must be distinct nonempty strings (up to 128 UTF-8 bytes) or
+canonical decimal integers (up to 128 characters). Integer identity values do
+not pass through floating-point conversion. The provider validates its own ID
+range and data policy. Booleans, null, arrays, objects and fractions are not
+identities. A projection field cannot overlap the static context. Static context
+is limited to 64 fields and 16 KiB; mappings are limited to 4,096 source users.
+A missing mapping fails admission. Multiple source users cannot share one
+service identity. The authenticated execution bot is the only excluded service
+reader and must not appear in the mapping. Other bots are rejected by default, even if mapped. A binding may declare one
+fixed peer recipient under `access_context.peer_recipient`, with its immutable
+Mattermost `id` and a distinct provider scope `field`. Admission requires that
+active bot, the execution bot, and exactly the mapped humans. The provider
+must validate the peer ID in the named field before granting any data scope.
+The peer has no input or trigger authority. No role or display-name fallback is used.
+
+The confirmed Mattermost audience, excluding any receive-only peer, remains
+in a separate `allowed_input_subjects` list of namespaced source identities.
+The connector stores `access_proof` in its message metadata: the frozen source
+audience and a digest of the projection configuration. Channel, root and source
+identity remain in the existing envelope. Provider scope contains none of these
+transport fields unless an integration explicitly configures such static data.
+
 After a run slot is reserved, the connector reads the private channel and all
 membership pages, including admins and bots. It checks counts before and after
-pagination and rejects missing, duplicate, invalid or incomplete results.
+pagination and rejects missing, duplicate, invalid or incomplete results. It
+confirms each mapped reader through the user API, including account state and
+bot status, before issuing credentials.
 Mattermost has no transactional membership snapshot: equal-count replacements
 concurrent with pagination cannot be detected by counts alone. Live acceptance
 must verify the server's membership semantics. Public channels and DMs are not
@@ -296,7 +336,21 @@ against accepted history before another submission. A lost, unaccepted pending
 snapshot is not reconstructed transparently: the same invocation with different
 context is rejected by the provider and needs a new mention.
 
-Active clarifications use the initial audience. Authors outside it remain
+On recovery, the connector validates the envelope binding, transport proof,
+projection digest, projected service scope and explicit input list before
+building context or preparing files. Missing legacy authority/proof, an invalid
+projection or a mismatched namespace/list blocks updates to an active run.
+The next run starts a clean session and history boundary. The connector never
+derives missing input authority from service scope. An unreadable metadata
+envelope still fails closed and requires repair.
+
+Projection configuration participates in the existing workflow revision. A
+mapping or static-context change does not reinterpret an active run: the current
+response finishes with its frozen snapshot, no new clarifications are delivered
+under the changed revision, and the next run starts clean. Frozen pending
+admission retries retain the original projection and invocation.
+
+Active clarifications use the initial explicit input list. Authors outside it remain
 unaccepted in Mattermost; neither their text nor files enter `BuildMessages` or
 `Sandbox.Prepare`. Every delivered item has its confirmed author in the existing
 `SendMessage.access_context.input_subjects`. Renewal and publication do not fetch
@@ -311,3 +365,30 @@ reading files, even if the boundary post has been deleted. Linked-thread
 expansion is disabled. Rejected clarifications from a finished run are not
 transferred automatically for protected workflows; a new mention is required.
 Delivery, outbox, external thread keys and the stock queue remain unchanged.
+
+When `channel_only: true` is set in the access binding, the connector requires
+a fixed peer, an empty service list and no harness environment or bot triggers.
+The host must supply a Unix policy socket at `/run/orpheus-policy/admission.sock`.
+The connector posts the workflow, channel, execution bot, readership and
+trigger authors to `/admit` before dispatch and checks again before delivery.
+Only HTTP 204 permits the operation. These runs receive no business credentials.
+
+Channel-only workflows also require a local input processor on
+`/run/orpheus-input/input.sock`. It accepts a bounded POST to `/project`
+with the input MIME type and returns approved UTF-8 text. A failed projection
+blocks submission. The connector fetches and verifies the current post and its
+attachments locally. The sandbox receives only the projected input, with no
+Mattermost token, attachment hooks or business services. Each subsequent mention
+starts a new session after the previous one finishes. Output is text only.
+
+
+`local_services: true` explicitly enables selected business services with the
+same host authorization and input projection as channel-only mode. Set
+`channel_only: false`, choose a nonempty `services` list, and retain the fixed
+peer, private channel allowlist, exact human mappings and mention-only triggers.
+Harness `env_from` and bot triggers remain forbidden. Each mention starts a fresh
+single-run session; the sandbox receives no Mattermost token, attachment hooks
+or original channel files. Output is text only. The policy socket must permit
+both dispatch and publication; unavailable or denying policy blocks either.
+Only configure services whose credentials are intended for this exact local
+owner policy. This mode does not request provider-issued credentials.

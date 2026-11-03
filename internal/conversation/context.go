@@ -39,7 +39,20 @@ func Mention(body string, names []string) bool {
 		if !ok {
 			return ast.WalkContinue, nil
 		}
-		s := strings.ToLower(string(node.Segment.Value(source)))
+		// Markdown can split a literal username at underscores. Scan the
+		// entire contiguous text span once, without crossing markup.
+		if prev, ok := node.PreviousSibling().(*ast.Text); ok && prev.Segment.Stop == node.Segment.Start {
+			return ast.WalkContinue, nil
+		}
+		end := node.Segment.Stop
+		for next := node.NextSibling(); next != nil; next = next.NextSibling() {
+			part, ok := next.(*ast.Text)
+			if !ok || part.Segment.Start != end {
+				break
+			}
+			end = part.Segment.Stop
+		}
+		s := strings.ToLower(string(source[node.Segment.Start:end]))
 		for _, name := range names {
 			needle := "@" + strings.ToLower(name)
 			offset := 0

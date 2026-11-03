@@ -206,6 +206,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 	}
 	r.Engine.Reserve = r.reserve
 	var wg sync.WaitGroup
+	wg.Go(func() { r.typingLoop(ctx) })
 	defer func() { cancel(); wg.Wait(); r.ready.Store(false) }()
 	wg.Go(func() {
 		for ctx.Err() == nil {

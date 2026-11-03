@@ -106,7 +106,7 @@ func (c *Client) Sessions(ctx context.Context, namespace, external string) ([]co
 			if ptr(s.Namespace) != namespace {
 				return nil, errors.New("orpheus namespace mismatch")
 			}
-			result = append(result, conversation.Session{ID: s.ID.String(), AllowMultipleRuns: s.AllowMultipleRuns, ExternalKey: ptr(s.ExternalKey), CreatedAt: s.CreatedAt, SandboxID: ptr(s.Sandbox.ID), SandboxState: string(s.Sandbox.State), SandboxLastState: ptr(s.Sandbox.LastKnownState), Workspace: ptr(s.Sandbox.Workspace), TotalTokens: s.Usage.TotalTokens, MaxTokens: s.Configuration.Limits.MaxSessionTokens})
+			result = append(result, conversation.Session{Model: s.Configuration.Agent.Model, ID: s.ID.String(), AllowMultipleRuns: s.AllowMultipleRuns, ExternalKey: ptr(s.ExternalKey), CreatedAt: s.CreatedAt, SandboxID: ptr(s.Sandbox.ID), SandboxState: string(s.Sandbox.State), SandboxLastState: ptr(s.Sandbox.LastKnownState), Workspace: ptr(s.Sandbox.Workspace), TotalTokens: s.Usage.TotalTokens, MaxTokens: s.Configuration.Limits.MaxSessionTokens})
 		}
 		if p.NextCursor == nil {
 			break
@@ -147,7 +147,7 @@ func (c *Client) Runs(ctx context.Context, id string) ([]conversation.Run, error
 	return result, nil
 }
 func run(r api.Run) conversation.Run {
-	v := conversation.Run{ID: r.ID.String(), SessionID: r.SessionID.String(), Number: r.Number, Status: string(r.Status), Observation: ptr(r.Observation), AgentStatus: ptr(r.AgentStatus), StopReason: ptr(r.StopReason), CreatedAt: r.CreatedAt, FinishedAt: r.FinishedAt, DeadlineAt: r.DeadlineAt}
+	v := conversation.Run{Usage: r.Usage, ID: r.ID.String(), SessionID: r.SessionID.String(), Number: r.Number, Status: string(r.Status), Observation: ptr(r.Observation), AgentStatus: ptr(r.AgentStatus), StopReason: ptr(r.StopReason), CreatedAt: r.CreatedAt, FinishedAt: r.FinishedAt, DeadlineAt: r.DeadlineAt}
 	if r.Error != nil {
 		v.Error = r.Error.Code
 		v.ErrorMessage = r.Error.Message
@@ -336,6 +336,15 @@ func (c *Client) Submit(ctx context.Context, w config.Workflow, e conversation.E
 		return conversation.Accepted{}, err
 	}
 	envFrom := []string{w.Mattermost.TokenEnv}
+	access := e.AccessContext
+	localPolicy := w.Access.LocalPolicy()
+	if localPolicy {
+		// Authorization and input projection stay local. Only explicitly selected
+		// services may receive credentials; transport secrets and hooks stay local.
+		access = nil
+		env = map[string]string{}
+		envFrom = []string{}
+	}
 	var request any
 	var sessionBody api.CreateSession
 	var runBody api.CreateRun
@@ -346,18 +355,21 @@ func (c *Client) Submit(ctx context.Context, w config.Workflow, e conversation.E
 		operation = "message"
 		key = e.Key().Operation(e.Anchor, "message", runID, predecessor)
 		messageBody = api.SendMessage{Messages: input}
-		if e.AccessContext != nil {
+		if access != nil {
 			messageBody.AccessContext = &api.InputAccessContext{InputSubjects: e.InputSubjects}
 		}
 		request = messageBody
 	case sessionID != "":
 		operation = "run"
 		key = e.Key().Operation(e.Anchor, "run", sessionID, predecessor)
-		runBody = api.CreateRun{AccessContext: e.AccessContext, Messages: input, Env: &env, EnvFrom: &envFrom, InputFingerprint: &fingerprint}
+		runBody = api.CreateRun{AccessContext: access, Messages: input, Env: &env, EnvFrom: &envFrom, InputFingerprint: &fingerprint}
 		request = runBody
 	default:
 		operation = "session"
 		conf := api.ConfigurationInput{Agent: api.AgentInput{Profile: w.Profile, Instructions: new(w.Instructions)}, Sandbox: api.SandboxInput{Template: w.SandboxTemplate}, Limits: &api.LimitsInput{RunTimeoutSeconds: &w.RunTimeoutSeconds, MaxSessionTokens: &w.MaxSessionTokens}, Hooks: &api.HooksInput{BeforeRun: new(sandbox.BeforeRun()), AfterRun: new(sandbox.AfterRun()), TimeoutSeconds: &w.HookTimeoutSeconds}}
+		if localPolicy {
+			conf.Hooks = nil
+		}
 		if len(w.EnvFrom) > 0 {
 			conf.Sandbox.EnvFrom = &w.EnvFrom
 		}
@@ -366,7 +378,7 @@ func (c *Client) Submit(ctx context.Context, w config.Workflow, e conversation.E
 		}
 		namespace := e.Key().Namespace()
 		externalKey := e.Key().External()
-		sessionBody = api.CreateSession{AccessContext: e.AccessContext, AllowMultipleRuns: new(true), Messages: input, Namespace: &namespace, ExternalKey: &externalKey, Configuration: conf, Env: &env, EnvFrom: &envFrom, InputFingerprint: &fingerprint}
+		sessionBody = api.CreateSession{AccessContext: access, AllowMultipleRuns: new(!localPolicy), Messages: input, Namespace: &namespace, ExternalKey: &externalKey, Configuration: conf, Env: &env, EnvFrom: &envFrom, InputFingerprint: &fingerprint}
 		request = sessionBody
 		key = e.Key().Operation(e.Anchor, "session", e.Key().External(), predecessor)
 	}

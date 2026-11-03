@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/orpheus-agents/orpheus-mattermost/internal/feedback"
+
 	"github.com/orpheus-agents/orpheus-mattermost/internal/agentbox"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/attachments"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/config"
@@ -18,6 +20,7 @@ import (
 	"github.com/orpheus-agents/orpheus-mattermost/internal/delivery"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/mattermost"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/orpheus"
+	api "github.com/orpheus-agents/orpheus/client"
 )
 
 type API interface {
@@ -159,7 +162,7 @@ func hookOutput(s conversation.Session, r conversation.Run, env conversation.Env
 	}
 	return attachments.Output{}, errors.New("export result unknown")
 }
-func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversation.Session, r conversation.Run) (result error) {
+func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversation.Session, r conversation.Run, w config.Workflow) (result error) {
 	defer func() {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -176,10 +179,32 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 	if err != nil {
 		return err
 	}
+	if w.Access != nil && w.Access.Peer != nil {
+		p.BeforeCreate = func(ctx context.Context) error {
+			if err := validateProtectedContext(env, w); err != nil {
+				return err
+			}
+			audience, _, err := e.confirmAudience(ctx, w, p.Key)
+			if err != nil {
+				return err
+			}
+			if _, _, err = projectAccess(*w.Access, audience, env.AccessContext.Subject.ID); err != nil {
+				return err
+			}
+			return localGate(ctx, w, env, audience, []string{env.AccessContext.Subject.ID})
+		}
+		defer func() { p.BeforeCreate = nil }()
+	}
 	p.SkipAttachments = p.NoticeExists("attachments_failed", r.ID)
 	defer func() { p.SkipAttachments = false }()
+	temporary := false
+	frozenCost := ""
 	send := func(mid, text string, files []attachments.Artifact) error {
 		for _, part := range delivery.Parts(p.Key, s.ID, r.ID, mid, text, env.Render, files) {
+			part.Receipt.Temporary = temporary
+			if !temporary {
+				part.Receipt.CostFooter = frozenCost
+			}
 			if err := p.Publish(ctx, part); err != nil {
 				if !errors.Is(err, delivery.ErrUpload) {
 					return err
@@ -204,7 +229,7 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 	slices.SortStableFunc(messages, func(a, b conversation.Message) int { return a.Position - b.Position })
 	var output attachments.Output
 	stopped := p.NoticeExists("attachments_failed", r.ID)
-	if r.Terminal() && !stopped {
+	if r.Terminal() && !stopped && !w.Access.LocalPolicy() {
 		output, err = hookOutput(s, r, env, e.Bot.ID)
 		if err != nil {
 			if err = send("attachments_failed", "Could not deliver the result attachments.", nil); err != nil {
@@ -215,17 +240,46 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 			output.Files = nil
 		}
 	}
+	enabled := feedback.Enabled(r.CreatedAt)
+	if enabled && !r.Terminal() {
+		temporary = true
+		if err = send("feedback_started", "⏳ Принял сообщение. Начинаю обработку.", nil); err != nil {
+			return err
+		}
+		temporary = false
+	}
+	cost := feedback.Footer(s.Model, feedback.Usage{Input: r.Usage.InputTokens, Cached: r.Usage.CachedInputTokens, Output: r.Usage.OutputTokens, Total: r.Usage.TotalTokens}, r.CreatedAt)
+	if previous := p.FrozenCost(s.ID, r.ID); previous != "" {
+		cost = previous
+	}
+	frozenCost = cost
+	appendCost := func(text string) string {
+		if cost != "" {
+			return text + "\n\n" + cost
+		}
+		return text
+	}
+	costMessageID := r.FinalMessageID
+	if costMessageID == "" {
+		for _, m := range messages {
+			if m.RunID == r.ID && m.Role == "assistant" && m.Kind == "answer" && m.Position >= 0 {
+				costMessageID = m.ID
+			}
+		}
+	}
 	hasAnswer := false
 	for _, m := range messages {
 		if m.RunID != r.ID || m.Role != "assistant" || m.Position < 0 {
 			continue
 		}
 		if m.Kind == "progress" {
-			if env.Render.Commentary && m.Text != "" {
+			if (env.Render.Commentary && !enabled || enabled && !r.Terminal()) && m.Text != "" {
+				temporary = enabled
 				if err = send(m.ID, m.Text, nil); err != nil {
 					return err
 				}
 			}
+			temporary = false
 			continue
 		}
 		if m.Kind != "answer" || !r.Terminal() {
@@ -239,7 +293,11 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 			continue
 		}
 		hasAnswer = true
-		if err = send(m.ID, m.Text, files); err != nil {
+		text := m.Text
+		if m.ID == costMessageID && delivery.Failure(r, env.Render) == "" {
+			text = appendCost(text)
+		}
+		if err = send(m.ID, text, files); err != nil {
 			return err
 		}
 	}
@@ -247,16 +305,24 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 		return nil
 	}
 	if r.FinalMessageID == "" && len(output.Files) > 0 {
-		if err = send("attachments_only", "", output.Files); err != nil {
+		if err = send("attachments_only", appendCost(""), output.Files); err != nil {
 			return err
 		}
 		hasAnswer = true
 	}
 	if text := delivery.Failure(r, env.Render); text != "" {
-		return send("run_status", text, nil)
+		if err = send("run_status", appendCost(text), nil); err != nil {
+			return err
+		}
+		return p.CleanupProgress(ctx, s.ID, r.ID)
 	}
 	if !hasAnswer && !stopped {
-		return send("empty_result", "Run finished without a text answer or files.", nil)
+		if err = send("empty_result", appendCost("Run finished without a text answer or files."), nil); err != nil {
+			return err
+		}
+	}
+	if enabled {
+		return p.CleanupProgress(ctx, s.ID, r.ID)
 	}
 	return nil
 }
@@ -381,7 +447,7 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 	postCount := len(p.Posts)
 	for _, s := range snapshot.Sessions {
 		for _, r := range s.Runs {
-			if err = e.publish(ctx, p, s, r); err != nil {
+			if err = e.publish(ctx, p, s, r, w); err != nil {
 				return err
 			}
 		}
@@ -477,17 +543,19 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 				return provenanceErr
 			}
 			runContract = previous
-			audience := previous.AccessContext.ScopeContext.AudienceSubjects
+			allowed := *previous.AccessContext.AllowedInputSubjects
 			// Filter before BuildMessages: excluded authors' files must never
 			// reach the running sandbox. They stay unaccepted in Mattermost.
-			posts = slices.DeleteFunc(posts, func(post mattermost.Post) bool { return !slices.Contains(audience, post.UserID) })
+			posts = slices.DeleteFunc(posts, func(post mattermost.Post) bool {
+				return !slices.Contains(allowed, api.AccessSubject{Namespace: w.Access.Namespace, ID: post.UserID})
+			})
 		} else if provenanceErr != nil {
 			initial = true
 		}
 		if !initial {
 			builder.ContextStart = previous.ContextStart
 		}
-		builder.TriggerOnly = initial
+		builder.TriggerOnly = initial || w.Access.LocalPolicy()
 	}
 	env, messages, buildErr := builder.BuildMessages(ctx, key, channel, posts, snapshot, initial, time.Now())
 	predecessor := ""
@@ -526,6 +594,10 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 	}
 	if buildErr != nil {
 		return e.reject(ctx, p, env, messages, "Message exceeds the input size limit. Split the request.")
+	}
+	if run != nil && w.Access != nil && w.Access.LocalPolicy() {
+		// A second mention gets its own fresh admission when the active run finishes.
+		return nil
 	}
 	if run != nil {
 		// Without optional SDK access, keep the entire batch in Mattermost until
@@ -606,18 +678,20 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 		}
 		if run != nil {
 			frozen.Envelope.AccessContext = runContract.AccessContext
+			frozen.Envelope.AccessProof = runContract.AccessProof
 			for _, message := range messages {
-				if message.Subject.Namespace != w.Access.Namespace || !slices.Contains(runContract.AccessContext.ScopeContext.AudienceSubjects, message.Subject.ID) {
+				if !slices.Contains(*runContract.AccessContext.AllowedInputSubjects, message.Subject) {
 					return errors.New("unconfirmed input author")
 				}
 				frozen.Envelope.InputSubjects = append(frozen.Envelope.InputSubjects, message.Subject)
 			}
 		} else {
-			access, err := e.admission(ctx, w, key, env, posts)
+			access, proof, err := e.admission(ctx, w, key, env, posts)
 			if err != nil {
 				return err
 			}
 			frozen.Envelope.AccessContext = access
+			frozen.Envelope.AccessProof = proof
 		}
 	}
 	e.set(key, frozen)
@@ -628,6 +702,30 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 const maxAttachmentClarifications = 32
 
 func (e *Engine) submit(ctx context.Context, key conversation.Key, p pending, current *conversation.Session, run *conversation.Run) error {
+	if a := p.Workflow.Access; a.LocalPolicy() {
+		if err := validateProtectedContext(p.Envelope, p.Workflow); err != nil {
+			return err
+		}
+		audience, _, err := e.confirmAudience(ctx, p.Workflow, key)
+		if err != nil {
+			return err
+		}
+		if _, _, err := projectAccess(*a, audience, p.Envelope.AccessContext.Subject.ID); err != nil {
+			return err
+		}
+		authors := []string{p.Envelope.AccessContext.Subject.ID}
+		for _, post := range p.TriggerPosts {
+			if !slices.Contains(authors, post.UserID) {
+				authors = append(authors, post.UserID)
+			}
+		}
+		if err := localGate(ctx, p.Workflow, p.Envelope, audience, authors); err != nil {
+			return err
+		}
+		if err := projectLocalInput(ctx, &p, e.MM); err != nil {
+			return err
+		}
+	}
 	if p.Run != "" && len(p.Envelope.Request.Files) > 0 {
 		if e.Sandbox == nil {
 			return nil
