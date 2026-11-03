@@ -132,16 +132,15 @@ coverage and the 1,000-thread recovery workload. A passing local suite does not
 establish compatibility with a different template or agent profile.
 Supported limits and file-error behavior are documented in [FILES.md](docs/FILES.md).
 
-## Temporary progress and model cost
+## Progress history and model cost
 
 With `BOT_FEEDBACK_SINCE` set to a Unix timestamp, newly accepted runs publish a
-working post and user-facing agent progress. Confirmed temporary posts are
-removed after every final answer part has a durable receipt. A lost final create
-response leaves progress visible until REST reconciliation verifies the answer.
-Deletion checks bot, source, workflow, thread, session, run and content hash;
-modified posts, attached files and user messages are preserved. Restarting does
-not replay terminal progress. Typing is refreshed every four seconds independently
-of model events.
+working post and user-facing agent progress. These short messages stay in the
+thread after success, failure or cancellation. The connector never deletes
+progress after an answer: Mattermost displays live deletions as "message deleted"
+placeholders. Delivery receipts prevent duplicate progress and final answers
+after retries or restarts. Restarting does not replay terminal progress. Typing
+is refreshed every four seconds independently of model events.
 
 `BOT_COST_FILE` points to a read-only JSON file with dated `fx` USD/RUB rates and
 per-million-token `models` prices (`input`, `cached`, `output`). The final message
