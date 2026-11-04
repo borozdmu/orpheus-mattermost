@@ -152,6 +152,10 @@ Exchange rates are selected at run creation in Moscow time. Persisted final
 receipts freeze the footer for retries. Pre-cutover runs keep their original
 rendering, so existing immutable receipts remain valid.
 
+The connector's operating-system user must be able to traverse the mounted
+directory and read the cost file. See [cost-file permissions](docs/COST_FILE_PERMISSIONS.md)
+for installation, repair and acceptance checks.
+
 On hosts with exhausted Docker default address pools, set `SMOKE_SUBNET` to an
 unused explicit subnet for the temporary smoke-test network. The test removes
 only the network and containers it created.
