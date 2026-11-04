@@ -9,6 +9,7 @@ import (
 	"github.com/orpheus-agents/orpheus-mattermost/internal/attachments"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/conversation"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/mattermost"
+ "github.com/orpheus-agents/orpheus-mattermost/internal/transcription"
 )
 
 const audioID = "vvvvvvvvvvvvvvvvvvvvvvvvvv"
@@ -140,3 +141,15 @@ func TestVoiceOptInLeavesExistingAttachmentsUnchanged(t *testing.T) {
 		t.Fatal("voice was not opt-in")
 	}
 }
+
+ type rejectedVoice struct{}
+ func (rejectedVoice) Transcribe(context.Context, []byte) (string,error) { return "",transcription.ErrAudio }
+ func TestUnsupportedAudioIsRejectedOnceWithoutRun(t *testing.T) {
+  e,api,src,_,key := voiceFixture(t)
+  e.Voice = rejectedVoice{}
+  w := e.Config.Workflows[0]
+  channel := mattermost.Channel{ID:key.Channel,Type:"O"}
+  if err:=e.Thread(t.Context(),w,key,channel,true);err!=nil {t.Fatal(err)}
+  if err:=e.Thread(t.Context(),w,key,channel,true);err!=nil {t.Fatal(err)}
+  if len(api.submitted)!=0 || src.calls!=1 || src.downloads!=1 {t.Fatalf("submits=%d notices=%d downloads=%d",len(api.submitted),src.calls,src.downloads)}
+ }

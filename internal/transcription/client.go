@@ -20,6 +20,8 @@ const MaxTextBytes = 64 << 10
 
 var ErrRequest = errors.New("voice transcription unavailable; request was not retried")
 
+var ErrAudio = errors.New("recording is unsupported or exceeds the audio limit")
+
 type Client struct {
 	endpoint, model, key string
 	http                 *http.Client
@@ -34,7 +36,7 @@ func New(endpoint, model, key string, timeout time.Duration) *Client {
 
 func (c *Client) Transcribe(ctx context.Context, data []byte) (string, error) {
 	if len(data) == 0 || len(data) > 20_000_000 {
-		return "", ErrRequest
+		return "", ErrAudio
 	}
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
@@ -67,6 +69,9 @@ func (c *Client) Transcribe(ctx context.Context, data []byte) (string, error) {
 		return "", ErrRequest
 	}
 	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode == 400 || res.StatusCode == 413 || res.StatusCode == 415 || res.StatusCode == 422 {
+		return "", ErrAudio
+	}
 	if res.StatusCode != http.StatusOK {
 		return "", ErrRequest
 	}
