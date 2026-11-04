@@ -1,10 +1,10 @@
 package sandbox
 
 import (
- "crypto/sha256"
- _ "embed"
- "encoding/base64"
- "fmt"
+	"crypto/sha256"
+	_ "embed"
+	"encoding/base64"
+	"fmt"
 )
 
 //go:embed local.py
@@ -21,10 +21,10 @@ func LocalBeforeRun() string { return localHook("prepare") }
 func LocalAfterRun() string { return localHook("export") }
 
 func localHook(operation string) string {
- code := fmt.Sprintf(`import base64,hashlib
+	code := fmt.Sprintf(`import base64,hashlib
 source=base64.b64decode(%q)
 assert hashlib.sha256(source).hexdigest()==%q
 exec(compile(source,"local-tools","exec"),{"__name__":"__main__"})
 `, base64.StdEncoding.EncodeToString(localSource), LocalDigest())
- return "#!/bin/sh\nset -eu\nexec python3 -I -c '" + code + "' " + operation + "\n"
+	return "#!/bin/sh\nset -eu\nexec python3 -I -c '" + code + "' " + operation + "\n"
 }

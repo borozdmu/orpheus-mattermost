@@ -371,7 +371,9 @@ func (c *Client) Submit(ctx context.Context, w config.Workflow, e conversation.E
 			conf.Hooks = nil
 			if w.Access.LocalServices {
 				conf.Hooks = &api.HooksInput{BeforeRun: new(sandbox.LocalBeforeRun()), TimeoutSeconds: &w.HookTimeoutSeconds}
-				if w.Access.LocalFiles { conf.Hooks.AfterRun = new(sandbox.LocalAfterRun()) }
+				if w.Access.LocalFiles {
+					conf.Hooks.AfterRun = new(sandbox.LocalAfterRun())
+				}
 			}
 		}
 		if len(w.EnvFrom) > 0 {

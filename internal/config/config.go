@@ -372,7 +372,9 @@ func (c *Config) validate() error {
 		b, _ := json.Marshal(semantic)
 		// A message-format change requires a fresh session even when the workflow file is unchanged.
 		hookDigest := sandbox.Digest()
-		if w.Access != nil && w.Access.LocalServices { hookDigest += ":" + sandbox.LocalDigest() }
+		if w.Access != nil && w.Access.LocalServices {
+			hookDigest += ":" + sandbox.LocalDigest()
+		}
 		h := sha256.Sum256(append(b, (hookDigest + ":mattermost-front-matter-v2")...))
 		w.EffectiveRevision = w.Revision + ":" + hex.EncodeToString(h[:])
 	}

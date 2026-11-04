@@ -14,7 +14,7 @@ import (
 // Access maps confirmed source identities into an integration's service context.
 // The provider owns the meaning of fields and mapped identities.
 type Access struct {
-	LocalFiles bool `yaml:"local_files,omitempty" json:"local_files,omitempty"`
+	LocalFiles         bool               `yaml:"local_files,omitempty" json:"local_files,omitempty"`
 	ChannelOnly        bool               `yaml:"channel_only,omitempty" json:"channel_only,omitempty"`
 	LocalServices      bool               `yaml:"local_services,omitempty" json:"local_services,omitempty"`
 	Peer               *PeerRecipient     `yaml:"peer_recipient,omitempty" json:"peer_recipient,omitempty"`
@@ -91,7 +91,9 @@ func (id *SubjectID) UnmarshalYAML(node *yaml.Node) error {
 }
 
 func (a Access) Validate() error {
-	if a.LocalFiles && !a.LocalServices { return errors.New("local files require local services") }
+	if a.LocalFiles && !a.LocalServices {
+		return errors.New("local files require local services")
+	}
 	if !accessNamePattern.MatchString(a.Namespace) || !ValidID(a.BotID) || a.ScopeContext == nil {
 		return errors.New("invalid protected workflow binding")
 	}

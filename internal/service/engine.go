@@ -231,7 +231,7 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 	stopped := p.NoticeExists("attachments_failed", r.ID)
 	if r.Terminal() && !stopped && (!w.Access.LocalPolicy() || w.Access.LocalFiles) {
 		if w.Access != nil && w.Access.LocalFiles {
-			output, err = e.localOutput(ctx,p,s,r,env)
+			output, err = e.localOutput(ctx, p, s, r, env)
 		} else {
 			output, err = hookOutput(s, r, env, e.Bot.ID)
 		}
