@@ -206,8 +206,11 @@ func TestLocalPolicySubmitKeepsTransportCredentialsLocal(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Error(err)
 				}
-				if len(body.Env)+len(body.EnvFrom)+len(body.Configuration.Sandbox.EnvFrom) != 0 || body.AllowMultipleRuns || len(body.Configuration.Hooks) != 0 || len(body.AccessContext) != 0 {
+				if len(body.Env)+len(body.EnvFrom)+len(body.Configuration.Sandbox.EnvFrom) != 0 || body.AllowMultipleRuns || len(body.AccessContext) != 0 {
 					t.Error("unexpected transport credentials, hooks, provider context or reuse")
+				}
+				if (len(services) == 0) != (len(body.Configuration.Hooks) == 0) {
+					t.Error("local hook selection mismatch")
 				}
 				if !slices.Equal(body.Configuration.Sandbox.Services, services) {
 					t.Error("selected services changed")

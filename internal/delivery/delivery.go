@@ -359,3 +359,19 @@ func Failure(r conversation.Run, render conversation.Render) string {
 	}
 	return ""
 }
+
+// ExistingArtifact recovers a verified upload from this bot's own delivery
+// receipt. A reconciled run never uploads again merely because it was restarted.
+func (p *Publisher) ExistingArtifact(ctx context.Context, session, run, id, sha string) (attachments.Artifact, bool, error) {
+ for _, post := range p.Posts {
+  r,ok:=p.receipt(post)
+  if !ok||r.SessionID!=session||r.RunID!=run||r.Hash!=attachments.Hash([]byte(post.Message)){continue}
+  for _,artifact:=range r.Attachments {
+   if artifact.ArtifactID!=id {continue}
+   if artifact.SHA256!=sha{return artifact,false,ErrConflict}
+   valid,err:=p.verified(ctx,post,artifact);if err!=nil{return artifact,false,err}
+   if valid{return artifact,true,nil}
+  }
+ }
+ return attachments.Artifact{},false,nil
+}

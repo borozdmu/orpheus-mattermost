@@ -155,3 +155,22 @@ rendering, so existing immutable receipts remain valid.
 On hosts with exhausted Docker default address pools, set `SMOKE_SUBNET` to an
 unused explicit subnet for the temporary smoke-test network. The test removes
 only the network and containers it created.
+
+### Local tools and approved output files
+
+A workflow with `access_context.local_services: true` installs only clients supplied
+by its selected services. Each `ORPHEUS_LOCAL_TOOL_<NAME>` variable contains a
+base64 JSON object with `directory`, `source_b64`, and `sha256`. Directories are
+single hidden workspace directories; every client receives a private
+`current-run.json`. The hook has no Mattermost credential or source attachment.
+Unselected, modified or escaping tool definitions fail closed.
+
+`access_context.local_files: true` additionally requires exactly one selected tool
+with `after_run: true`. The after hook runs its service-pinned bytes, ignoring
+workspace edits. The tool must seal its approved results in the host relay.
+The connector obtains that manifest and bytes only through
+`/run/orpheus-output/output.sock`, verifies identities, size and hash, rechecks
+channel access before upload and publication, and uploads using its own token.
+Only the relay's text derivative formats are accepted. Existing bot receipts
+prevent duplicate uploads after reconciliation. Incomplete exports are not
+published. Transport secrets and original inputs never enter this output path.

@@ -371,7 +371,9 @@ func (c *Config) validate() error {
 		semantic.MessageBatchWindow = 0
 		b, _ := json.Marshal(semantic)
 		// A message-format change requires a fresh session even when the workflow file is unchanged.
-		h := sha256.Sum256(append(b, (sandbox.Digest() + ":mattermost-front-matter-v2")...))
+		hookDigest := sandbox.Digest()
+		if w.Access != nil && w.Access.LocalServices { hookDigest += ":" + sandbox.LocalDigest() }
+		h := sha256.Sum256(append(b, (hookDigest + ":mattermost-front-matter-v2")...))
 		w.EffectiveRevision = w.Revision + ":" + hex.EncodeToString(h[:])
 	}
 	for i, w := range c.Workflows {

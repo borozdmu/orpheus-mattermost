@@ -179,7 +179,7 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 	if err != nil {
 		return err
 	}
-	if w.Access != nil && w.Access.Peer != nil {
+	if w.Access != nil && (w.Access.Peer != nil || w.Access.LocalPolicy()) {
 		p.BeforeCreate = func(ctx context.Context) error {
 			if err := validateProtectedContext(env, w); err != nil {
 				return err
@@ -229,8 +229,12 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 	slices.SortStableFunc(messages, func(a, b conversation.Message) int { return a.Position - b.Position })
 	var output attachments.Output
 	stopped := p.NoticeExists("attachments_failed", r.ID)
-	if r.Terminal() && !stopped && !w.Access.LocalPolicy() {
-		output, err = hookOutput(s, r, env, e.Bot.ID)
+	if r.Terminal() && !stopped && (!w.Access.LocalPolicy() || w.Access.LocalFiles) {
+		if w.Access != nil && w.Access.LocalFiles {
+			output, err = e.localOutput(ctx,p,s,r,env)
+		} else {
+			output, err = hookOutput(s, r, env, e.Bot.ID)
+		}
 		if err != nil {
 			if err = send("attachments_failed", "Could not deliver the result attachments.", nil); err != nil {
 				return err

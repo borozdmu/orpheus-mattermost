@@ -369,6 +369,10 @@ func (c *Client) Submit(ctx context.Context, w config.Workflow, e conversation.E
 		conf := api.ConfigurationInput{Agent: api.AgentInput{Profile: w.Profile, Instructions: new(w.Instructions)}, Sandbox: api.SandboxInput{Template: w.SandboxTemplate}, Limits: &api.LimitsInput{RunTimeoutSeconds: &w.RunTimeoutSeconds, MaxSessionTokens: &w.MaxSessionTokens}, Hooks: &api.HooksInput{BeforeRun: new(sandbox.BeforeRun()), AfterRun: new(sandbox.AfterRun()), TimeoutSeconds: &w.HookTimeoutSeconds}}
 		if localPolicy {
 			conf.Hooks = nil
+			if w.Access.LocalServices {
+				conf.Hooks = &api.HooksInput{BeforeRun: new(sandbox.LocalBeforeRun()), TimeoutSeconds: &w.HookTimeoutSeconds}
+				if w.Access.LocalFiles { conf.Hooks.AfterRun = new(sandbox.LocalAfterRun()) }
+			}
 		}
 		if len(w.EnvFrom) > 0 {
 			conf.Sandbox.EnvFrom = &w.EnvFrom
