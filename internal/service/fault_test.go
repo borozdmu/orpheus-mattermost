@@ -164,7 +164,7 @@ func TestFinalMessageOwnsFilesAndFailureRemainsVisible(t *testing.T) {
 				if err := p.Refresh(t.Context()); err != nil {
 					t.Fatal(err)
 				}
-				if err := e.publish(t.Context(), p, s, r); err != nil {
+				if err := e.publish(t.Context(), p, s, r, e.Config.Workflows[0]); err != nil {
 					t.Fatal(err)
 				}
 			}

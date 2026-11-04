@@ -48,7 +48,13 @@ type Links struct {
 	MaxLinks int   `yaml:"max_links"`
 	MaxPosts int   `yaml:"max_posts"`
 }
+
 type Workflow struct {
+	TranscribeVoice bool `yaml:"transcribe_voice" json:"transcribe_voice,omitzero"`
+
+	AdmissionCheckpoint *AdmissionCheckpoint `yaml:"admission_checkpoint" json:"admission_checkpoint,omitzero"`
+
+	Access                *Access   `yaml:"access_context" json:"access_context,omitzero"`
 	Mattermost            Endpoint  `yaml:"mattermost"`
 	ID                    string    `yaml:"id"`
 	Revision              string    `yaml:"revision"`
@@ -82,6 +88,8 @@ type Workflow struct {
 	EffectiveRevision     string    `yaml:"-"`
 }
 type Config struct {
+	Transcription Transcription
+
 	AgentBoxAPIURL     string
 	Orpheus            Endpoint
 	Workflows          []Workflow
@@ -93,6 +101,7 @@ type Config struct {
 }
 
 var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,79}$`)
+var accessNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_.-]{0,127}$`)
 var envPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var servicePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 var idPattern = regexp.MustCompile(`^[a-z0-9]{26}$`)
@@ -133,6 +142,11 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	}
 	if err := cfg.HTTPTimeout.UnmarshalText([]byte(value("HTTP_TIMEOUT", "30s"))); err != nil {
 		return Config{}, errors.New("HTTP_TIMEOUT must be a duration")
+	}
+	var err error
+	cfg.Transcription, err = loadTranscription(func(key string) string { return value(key, "") })
+	if err != nil {
+		return Config{}, err
 	}
 	entries, err := os.ReadDir(cfg.WorkflowsDir)
 	if err != nil {
@@ -213,6 +227,9 @@ func (c *Config) validate() error {
 	dm := map[Endpoint]bool{}
 	for i := range c.Workflows {
 		w := &c.Workflows[i]
+		if w.TranscribeVoice && (w.Access.LocalPolicy() || c.Transcription.URL == "") {
+			return errors.New("voice workflows require transcription settings; local-policy input is owned by its local processor")
+		}
 		if !validURL(w.Mattermost.BaseURL) || !envPattern.MatchString(w.Mattermost.TokenEnv) {
 			return fmt.Errorf("workflow %s: mattermost.base_url and token_env are required", w.ID)
 		}
@@ -326,6 +343,26 @@ func (c *Config) validate() error {
 		if w.Links.MaxLinks < 1 || w.Links.MaxLinks > 5 || w.Links.MaxPosts < 2 || w.Links.MaxPosts > 20 {
 			return errors.New("invalid link expansion limits")
 		}
+		if a := w.Access; a != nil {
+			if a.Peer != nil && slices.Contains(w.TriggerBotIDs, a.Peer.ID) {
+				return errors.New("protected peer recipient cannot trigger runs")
+			}
+			if err := a.Validate(); err != nil {
+				return err
+			}
+			if a.ChannelOnly && (a.Peer == nil || len(w.Services) != 0 || len(w.EnvFrom) != 0 || len(w.TriggerBotIDs) != 0) {
+				return errors.New("channel-only workflows require a fixed peer and no services, harness secrets or bot triggers")
+			}
+			if a.LocalServices && (a.ChannelOnly || a.Peer == nil || len(w.Services) == 0 || len(w.EnvFrom) != 0 || len(w.TriggerBotIDs) != 0) {
+				return errors.New("local-service workflows require a fixed peer and selected services, without channel-only mode, harness secrets or bot triggers")
+			}
+			if (!a.ChannelOnly && len(w.Services) == 0) || len(w.IncludeIDs) == 0 || !w.PrivateChannels || w.DirectMessages || w.GroupMessages || !*w.StartOnMention || *w.Links.Enabled {
+				return errors.New("protected workflows require services, explicit private channels, mentions and disabled link expansion")
+			}
+		}
+		if err := w.ValidateCheckpoint(); err != nil {
+			return err
+		}
 		// Runtime polling and drain switches do not invalidate a retained sandbox.
 		semantic := *w
 		semantic.Mattermost = Endpoint{}
@@ -346,7 +383,11 @@ func (c *Config) validate() error {
 		semantic.MessageBatchWindow = 0
 		b, _ := json.Marshal(semantic)
 		// A message-format change requires a fresh session even when the workflow file is unchanged.
-		h := sha256.Sum256(append(b, (sandbox.Digest() + ":mattermost-front-matter-v2")...))
+		hookDigest := sandbox.Digest()
+		if w.Access != nil && w.Access.LocalServices {
+			hookDigest += ":" + sandbox.LocalDigest()
+		}
+		h := sha256.Sum256(append(b, (hookDigest + ":mattermost-front-matter-v2")...))
 		w.EffectiveRevision = w.Revision + ":" + hex.EncodeToString(h[:])
 	}
 	for i, w := range c.Workflows {

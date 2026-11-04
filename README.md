@@ -57,6 +57,12 @@ immediate and batches containing files wait for the next run's `before_run`.
 through ordinary hooks work without these variables. There is no automatic SDK
 recovery of output manifests, reupload, or pause sweep.
 
+Optional `transcribe_voice: true` workflows transcribe audio attachments before
+admission through a configured HTTPS speech endpoint. The transcript stays with
+its author and original attachment; credentials remain in the connector.
+Local-policy workflows use their own input processor so masking still precedes
+model access. See [voice configuration](docs/CONFIGURATION.md#voice-input).
+
 The application does not read `.env` itself; Docker
 Compose supplies it. See [configuration](docs/CONFIGURATION.md) and the
 [sandbox file protocol](docs/FILES.md).
@@ -68,9 +74,17 @@ Suggested workflow text:
 > using an atomic rename, and then send your final answer. The connector
 > attaches outbox files to the last answer of the run.
 
-Binary commands: `serve`, `validate`, and `healthcheck`. The embedded Python
+Binary commands: `serve`, `validate`, `healthcheck`, and `export-checkpoint`. The embedded Python
 script handles `prepare-input`, `export-output`, and SDK `import-input`.
 File hooks upload files but never create Mattermost posts.
+
+## Transferring a channel
+
+A disabled workflow can import an [admission checkpoint](docs/ADMISSION_CHECKPOINT.md)
+from a drained previous transport. It preserves consumed IDs and the inclusive
+replay boundary, and starts a clean ownership period. This is not a switch
+command or a live handover acceptance. The read-only `export-checkpoint` command
+verifies native history and delivery receipts for a return to the previous transport.
 
 ## Development
 
@@ -123,6 +137,49 @@ See [acceptance testing](docs/TESTING.md) for worker crash injection, offline fa
 coverage and the 1,000-thread recovery workload. A passing local suite does not
 establish compatibility with a different template or agent profile.
 Supported limits and file-error behavior are documented in [FILES.md](docs/FILES.md).
+
+## Progress history and model cost
+
+With `BOT_FEEDBACK_SINCE` set to a Unix timestamp, newly accepted runs publish a
+working post and user-facing agent progress. These short messages stay in the
+thread after success, failure or cancellation. The connector never deletes
+progress after an answer: Mattermost displays live deletions as "message deleted"
+placeholders. Delivery receipts prevent duplicate progress and final answers
+after retries or restarts. Restarting does not replay terminal progress. Typing
+is refreshed every four seconds independently of model events.
+
+`BOT_COST_FILE` points to a read-only JSON file with dated `fx` USD/RUB rates and
+per-million-token `models` prices (`input`, `cached`, `output`). The final message
+contains a model-cost estimate from run usage. Cached input replaces normal input;
+reasoning is included in output. Missing usage, prices or a recent exchange rate
+produce an explicit unavailable message. This is a standard short-context model
+estimate, excluding cache-write surcharges, tools, sandbox compute and taxes.
+Exchange rates are selected at run creation in Moscow time. Persisted final
+receipts freeze the footer for retries. Pre-cutover runs keep their original
+rendering, so existing immutable receipts remain valid.
+
+On hosts with exhausted Docker default address pools, set `SMOKE_SUBNET` to an
+unused explicit subnet for the temporary smoke-test network. The test removes
+only the network and containers it created.
+
+### Local tools and approved output files
+
+A workflow with `access_context.local_services: true` installs only clients supplied
+by its selected services. Each `ORPHEUS_LOCAL_TOOL_<NAME>` variable contains a
+base64 JSON object with `directory`, `source_b64`, and `sha256`. Directories are
+single hidden workspace directories; every client receives a private
+`current-run.json`. The hook has no Mattermost credential or source attachment.
+Unselected, modified or escaping tool definitions fail closed.
+
+`access_context.local_files: true` additionally requires exactly one selected tool
+with `after_run: true`. The after hook runs its service-pinned bytes, ignoring
+workspace edits. The tool must seal its approved results in the host relay.
+The connector obtains that manifest and bytes only through
+`/run/orpheus-output/output.sock`, verifies identities, size and hash, rechecks
+channel access before upload and publication, and uploads using its own token.
+Only the relay's text derivative formats are accepted. Existing bot receipts
+prevent duplicate uploads after reconciliation. Incomplete exports are not
+published. Transport secrets and original inputs never enter this output path.
 
 ## External agent memory client
 

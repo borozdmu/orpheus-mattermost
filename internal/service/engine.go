@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/orpheus-agents/orpheus-mattermost/internal/feedback"
+
 	"github.com/orpheus-agents/orpheus-mattermost/internal/agentbox"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/attachments"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/config"
@@ -18,6 +20,8 @@ import (
 	"github.com/orpheus-agents/orpheus-mattermost/internal/delivery"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/mattermost"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/orpheus"
+	"github.com/orpheus-agents/orpheus-mattermost/internal/transcription"
+	api "github.com/orpheus-agents/orpheus/client"
 )
 
 type API interface {
@@ -34,6 +38,7 @@ type MM interface {
 	Channels(context.Context) ([]mattermost.Channel, error)
 	Posts(context.Context, string, time.Time) ([]mattermost.Post, error)
 	Me(context.Context) (mattermost.User, error)
+	Audience(context.Context, string) ([]string, error)
 	MaxPostChars(context.Context) (int, error)
 	Typing(context.Context, string, string) error
 	Watch(context.Context, func(mattermost.Event)) error
@@ -45,12 +50,22 @@ type Sandbox interface {
 }
 
 type pending struct {
+	VoicePrepared bool
+
+	Channel                   mattermost.Channel
+	TriggerPosts              []mattermost.Post
 	Workflow                  config.Workflow
 	Envelope                  conversation.Envelope
 	Session, Run, Predecessor string
 	Messages                  []conversation.InputMessage
 }
+type VoiceTranscriber interface {
+	Transcribe(context.Context, []byte) (string, error)
+}
+
 type Engine struct {
+	Voice VoiceTranscriber
+
 	Config       config.Config
 	MM           MM
 	API          API
@@ -156,7 +171,7 @@ func hookOutput(s conversation.Session, r conversation.Run, env conversation.Env
 	}
 	return attachments.Output{}, errors.New("export result unknown")
 }
-func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversation.Session, r conversation.Run) (result error) {
+func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversation.Session, r conversation.Run, w config.Workflow) (result error) {
 	defer func() {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -173,10 +188,32 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 	if err != nil {
 		return err
 	}
+	if w.Access != nil && (w.Access.Peer != nil || w.Access.LocalPolicy()) {
+		p.BeforeCreate = func(ctx context.Context) error {
+			if err := validateProtectedContext(env, w); err != nil {
+				return err
+			}
+			audience, _, err := e.confirmAudience(ctx, w, p.Key)
+			if err != nil {
+				return err
+			}
+			if _, _, err = projectAccess(*w.Access, audience, env.AccessContext.Subject.ID); err != nil {
+				return err
+			}
+			return localGate(ctx, w, env, audience, []string{env.AccessContext.Subject.ID})
+		}
+		defer func() { p.BeforeCreate = nil }()
+	}
 	p.SkipAttachments = p.NoticeExists("attachments_failed", r.ID)
 	defer func() { p.SkipAttachments = false }()
+	temporary := false
+	frozenCost := ""
 	send := func(mid, text string, files []attachments.Artifact) error {
 		for _, part := range delivery.Parts(p.Key, s.ID, r.ID, mid, text, env.Render, files) {
+			part.Receipt.Temporary = temporary
+			if !temporary {
+				part.Receipt.CostFooter = frozenCost
+			}
 			if err := p.Publish(ctx, part); err != nil {
 				if !errors.Is(err, delivery.ErrUpload) {
 					return err
@@ -201,8 +238,12 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 	slices.SortStableFunc(messages, func(a, b conversation.Message) int { return a.Position - b.Position })
 	var output attachments.Output
 	stopped := p.NoticeExists("attachments_failed", r.ID)
-	if r.Terminal() && !stopped {
-		output, err = hookOutput(s, r, env, e.Bot.ID)
+	if r.Terminal() && !stopped && (!w.Access.LocalPolicy() || w.Access.LocalFiles) {
+		if w.Access != nil && w.Access.LocalFiles {
+			output, err = e.localOutput(ctx, p, s, r, env)
+		} else {
+			output, err = hookOutput(s, r, env, e.Bot.ID)
+		}
 		if err != nil {
 			if err = send("attachments_failed", "Could not deliver the result attachments.", nil); err != nil {
 				return err
@@ -212,17 +253,46 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 			output.Files = nil
 		}
 	}
+	enabled := feedback.Enabled(r.CreatedAt)
+	if enabled && !r.Terminal() {
+		temporary = true
+		if err = send("feedback_started", "⏳ Принял сообщение. Начинаю обработку.", nil); err != nil {
+			return err
+		}
+		temporary = false
+	}
+	cost := feedback.Footer(s.Model, feedback.Usage{Input: r.Usage.InputTokens, Cached: r.Usage.CachedInputTokens, Output: r.Usage.OutputTokens, Total: r.Usage.TotalTokens}, r.CreatedAt)
+	if previous := p.FrozenCost(s.ID, r.ID); previous != "" {
+		cost = previous
+	}
+	frozenCost = cost
+	appendCost := func(text string) string {
+		if cost != "" {
+			return text + "\n\n" + cost
+		}
+		return text
+	}
+	costMessageID := r.FinalMessageID
+	if costMessageID == "" {
+		for _, m := range messages {
+			if m.RunID == r.ID && m.Role == "assistant" && m.Kind == "answer" && m.Position >= 0 {
+				costMessageID = m.ID
+			}
+		}
+	}
 	hasAnswer := false
 	for _, m := range messages {
 		if m.RunID != r.ID || m.Role != "assistant" || m.Position < 0 {
 			continue
 		}
 		if m.Kind == "progress" {
-			if env.Render.Commentary && m.Text != "" {
+			if (env.Render.Commentary && !enabled || enabled && !r.Terminal()) && m.Text != "" {
+				temporary = enabled
 				if err = send(m.ID, m.Text, nil); err != nil {
 					return err
 				}
 			}
+			temporary = false
 			continue
 		}
 		if m.Kind != "answer" || !r.Terminal() {
@@ -236,7 +306,11 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 			continue
 		}
 		hasAnswer = true
-		if err = send(m.ID, m.Text, files); err != nil {
+		text := m.Text
+		if m.ID == costMessageID && delivery.Failure(r, env.Render) == "" {
+			text = appendCost(text)
+		}
+		if err = send(m.ID, text, files); err != nil {
 			return err
 		}
 	}
@@ -244,16 +318,21 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 		return nil
 	}
 	if r.FinalMessageID == "" && len(output.Files) > 0 {
-		if err = send("attachments_only", "", output.Files); err != nil {
+		if err = send("attachments_only", appendCost(""), output.Files); err != nil {
 			return err
 		}
 		hasAnswer = true
 	}
 	if text := delivery.Failure(r, env.Render); text != "" {
-		return send("run_status", text, nil)
+		if err = send("run_status", appendCost(text), nil); err != nil {
+			return err
+		}
+		return nil
 	}
 	if !hasAnswer && !stopped {
-		return send("empty_result", "Run finished without a text answer or files.", nil)
+		if err = send("empty_result", appendCost("Run finished without a text answer or files."), nil); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -346,6 +425,9 @@ func (e *Engine) Thread(ctx context.Context, w config.Workflow, key conversation
 }
 
 func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversation.Key, channel mattermost.Channel, inScope bool, snapshot conversation.Snapshot) error {
+	if checkpoint := w.AdmissionCheckpoint; checkpoint != nil && (checkpoint.ChannelID != key.Channel || checkpoint.BotID != e.Bot.ID) {
+		return errors.New("admission checkpoint binding mismatch")
+	}
 	current, run, err := active(snapshot)
 	if err != nil {
 		return err
@@ -375,7 +457,7 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 	postCount := len(p.Posts)
 	for _, s := range snapshot.Sessions {
 		for _, r := range s.Runs {
-			if err = e.publish(ctx, p, s, r); err != nil {
+			if err = e.publish(ctx, p, s, r, w); err != nil {
 				return err
 			}
 		}
@@ -400,6 +482,9 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 		return nil
 	}
 	if frozen, ok := e.get(key); ok {
+		if w.AdmissionCheckpoint != nil && frozen.Workflow.EffectiveRevision != w.EffectiveRevision {
+			return errors.New("pending admission belongs to a previous ownership period")
+		}
 		if accepted(frozen, snapshot) {
 			e.clear(key)
 		} else {
@@ -410,6 +495,14 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 						targetLost = true
 					}
 				}
+			}
+			if targetLost && frozen.Workflow.Access != nil {
+				// Never reissue under a new snapshot after an uncertain admission.
+				if err := e.reject(ctx, p, frozen.Envelope, frozen.Messages, "The pending protected request lost its session. Send a new mention."); err != nil {
+					return err
+				}
+				e.clear(key)
+				return nil
 			}
 			if targetLost || frozen.Run != "" && (run == nil || run.ID != frozen.Run) {
 				// History proves that the clarification was not accepted and
@@ -441,6 +534,39 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 	rejected := p.Rejected(w.EffectiveRevision)
 	posts := slices.DeleteFunc(slices.Clone(p.Posts), func(post mattermost.Post) bool { return rejected[post.ID] })
 	builder := conversation.Builder{Source: e.MM, Config: e.Config, Workflow: w, Bot: e.Bot}
+	var runContract conversation.Envelope
+	if w.Access != nil {
+		if channel.Type != "P" || w.Access.BotID != e.Bot.ID {
+			return errors.New("protected channel binding mismatch")
+		}
+		retained := latest
+		retainedRun := (*conversation.Run)(nil)
+		if latest != nil {
+			retainedRun = latest.Latest()
+		}
+		if run != nil {
+			retained, retainedRun = current, run
+		}
+		previous, provenanceErr := protectedContract(retained, retainedRun, w, key)
+		if run != nil {
+			if provenanceErr != nil {
+				return provenanceErr
+			}
+			runContract = previous
+			allowed := *previous.AccessContext.AllowedInputSubjects
+			// Filter before BuildMessages: excluded authors' files must never
+			// reach the running sandbox. They stay unaccepted in Mattermost.
+			posts = slices.DeleteFunc(posts, func(post mattermost.Post) bool {
+				return !slices.Contains(allowed, api.AccessSubject{Namespace: w.Access.Namespace, ID: post.UserID})
+			})
+		} else if provenanceErr != nil {
+			initial = true
+		}
+		if !initial {
+			builder.ContextStart = previous.ContextStart
+		}
+		builder.TriggerOnly = initial || w.Access.LocalPolicy()
+	}
 	env, messages, buildErr := builder.BuildMessages(ctx, key, channel, posts, snapshot, initial, time.Now())
 	predecessor := ""
 	if latest != nil {
@@ -448,8 +574,14 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 			predecessor = last.ID
 		}
 	}
-	if run == nil {
-		if t, body, pred, ok := transfer(snapshot); ok {
+	if run == nil && w.Access == nil {
+		transferSnapshot := snapshot
+		if w.AdmissionCheckpoint != nil {
+			transferSnapshot.Sessions = slices.DeleteFunc(slices.Clone(snapshot.Sessions), func(s conversation.Session) bool {
+				return s.Revision != w.EffectiveRevision
+			})
+		}
+		if t, body, pred, ok := transfer(transferSnapshot); ok {
 			env = t
 			env.Revision = w.EffectiveRevision
 			messages = body
@@ -472,6 +604,10 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 	}
 	if buildErr != nil {
 		return e.reject(ctx, p, env, messages, "Message exceeds the input size limit. Split the request.")
+	}
+	if run != nil && w.Access != nil && w.Access.LocalPolicy() {
+		// A second mention gets its own fresh admission when the active run finishes.
+		return nil
 	}
 	if run != nil {
 		// Without optional SDK access, keep the entire batch in Mattermost until
@@ -543,6 +679,31 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 	if run == nil && e.Reserve != nil && !e.Reserve(key, w) {
 		return nil
 	}
+	if w.Access != nil {
+		frozen.Channel = channel
+		for _, post := range posts {
+			if slices.Contains(env.TriggerIDs, post.ID) {
+				frozen.TriggerPosts = append(frozen.TriggerPosts, post)
+			}
+		}
+		if run != nil {
+			frozen.Envelope.AccessContext = runContract.AccessContext
+			frozen.Envelope.AccessProof = runContract.AccessProof
+			for _, message := range messages {
+				if !slices.Contains(*runContract.AccessContext.AllowedInputSubjects, message.Subject) {
+					return errors.New("unconfirmed input author")
+				}
+				frozen.Envelope.InputSubjects = append(frozen.Envelope.InputSubjects, message.Subject)
+			}
+		} else {
+			access, proof, err := e.admission(ctx, w, key, env, posts)
+			if err != nil {
+				return err
+			}
+			frozen.Envelope.AccessContext = access
+			frozen.Envelope.AccessProof = proof
+		}
+	}
 	e.set(key, frozen)
 	return e.submit(ctx, key, frozen, current, run)
 }
@@ -551,6 +712,48 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 const maxAttachmentClarifications = 32
 
 func (e *Engine) submit(ctx context.Context, key conversation.Key, p pending, current *conversation.Session, run *conversation.Run) error {
+	if a := p.Workflow.Access; a.LocalPolicy() {
+		if err := validateProtectedContext(p.Envelope, p.Workflow); err != nil {
+			return err
+		}
+		audience, _, err := e.confirmAudience(ctx, p.Workflow, key)
+		if err != nil {
+			return err
+		}
+		if _, _, err := projectAccess(*a, audience, p.Envelope.AccessContext.Subject.ID); err != nil {
+			return err
+		}
+		authors := []string{p.Envelope.AccessContext.Subject.ID}
+		for _, post := range p.TriggerPosts {
+			if !slices.Contains(authors, post.UserID) {
+				authors = append(authors, post.UserID)
+			}
+		}
+		if err := localGate(ctx, p.Workflow, p.Envelope, audience, authors); err != nil {
+			return err
+		}
+		if err := projectLocalInput(ctx, &p, e.MM); err != nil {
+			return err
+		}
+	}
+	if p.Workflow.TranscribeVoice && !p.VoicePrepared {
+		if err := projectVoiceInput(ctx, &p, e.MM, e.Voice, e.Config.MaxRequestBytes); err != nil {
+			if !errors.Is(err, transcription.ErrAudio) {
+				return err
+			}
+			publisher := &delivery.Publisher{MM: e.MM, Key: key, BotID: e.Bot.ID}
+			if readErr := publisher.Refresh(ctx); readErr != nil {
+				return readErr
+			}
+			err = e.reject(ctx, publisher, p.Envelope, p.Messages, "Could not transcribe this recording. Check its format and size, or send the text.")
+			if err == nil {
+				e.clear(key)
+			}
+			return err
+		}
+		p.VoicePrepared = true
+		e.set(key, p)
+	}
 	if p.Run != "" && len(p.Envelope.Request.Files) > 0 {
 		if e.Sandbox == nil {
 			return nil
@@ -577,8 +780,16 @@ func (e *Engine) submit(ctx context.Context, key conversation.Key, p pending, cu
 		// Keep the frozen input until history proves whether it was accepted.
 		return nil
 	}
+	if failure, ok := errors.AsType[*orpheus.Error](err); ok && failure.Status == 409 && failure.Code == "service_scope_changed" && p.Workflow.Access != nil && p.Run == "" && p.Session != "" {
+		clean, buildErr := e.cleanPending(ctx, p)
+		if buildErr != nil {
+			return buildErr
+		}
+		e.set(key, clean)
+		return e.submit(ctx, key, clean, nil, nil)
+	}
 	switch code := orpheus.Code(err); code {
-	case "request_too_large", "environment_too_large", "validation_error", "unknown_profile", "unknown_template", "unknown_service":
+	case "service_access_denied", "service_credentials_conflict", "invocation_already_accepted", "access_context_required", "input_subject_denied", "invalid_service_scope", "request_too_large", "environment_too_large", "validation_error", "unknown_profile", "unknown_template", "unknown_service":
 		publisher := &delivery.Publisher{MM: e.MM, Key: key, BotID: e.Bot.ID}
 		if readErr := publisher.Refresh(ctx); readErr != nil {
 			return readErr
@@ -618,6 +829,11 @@ func (e *Engine) Validate(ctx context.Context) error {
 	}
 	if !config.ValidID(me.ID) || me.Username == "" {
 		return errors.New("invalid Mattermost bot identity")
+	}
+	for _, w := range e.Config.Workflows {
+		if w.Access != nil && w.Access.BotID != me.ID {
+			return errors.New("protected workflow bot binding mismatch")
+		}
 	}
 	e.Bot = me
 	e.SourceID = e.Config.Workflows[0].Mattermost.Source(me.ID)

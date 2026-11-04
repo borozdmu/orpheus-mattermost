@@ -21,6 +21,8 @@ var ErrConflict = errors.New("delivery receipt conflict")
 var ErrUpload = errors.New("attachment requires upload recovery")
 
 type Receipt struct {
+	Temporary     bool                   `json:"temporary,omitzero"`
+	CostFooter    string                 `json:"cost_footer,omitzero"`
 	Schema        int                    `json:"schema"`
 	Source        string                 `json:"source"`
 	Workflow      string                 `json:"workflow"`
@@ -53,6 +55,7 @@ type Publisher struct {
 	BotID           string
 	Posts           []mattermost.Post
 	SkipAttachments bool
+	BeforeCreate    func(context.Context) error
 }
 
 func (p *Publisher) Refresh(ctx context.Context) error {
@@ -252,6 +255,11 @@ func (p *Publisher) publishOne(ctx context.Context, part Part) error {
 		ids = append(ids, a.FileID)
 	}
 	key := attachments.ObjectHash([]any{part.Receipt.Source, part.Receipt.Workflow, part.Receipt.SessionID, part.Receipt.RunID, part.Receipt.MessageID, part.Receipt.Part})
+	if p.BeforeCreate != nil {
+		if err := p.BeforeCreate(ctx); err != nil {
+			return err
+		}
+	}
 	created, e := p.MM.Create(ctx, mattermost.CreatePost{ChannelID: p.Key.Channel, RootID: p.Key.Root, Message: part.Text, FileIDs: ids, PendingID: key[:26], Props: map[string]any{Property: part.Receipt}})
 	if e != nil {
 		return e
@@ -350,4 +358,31 @@ func Failure(r conversation.Run, render conversation.Render) string {
 		return text
 	}
 	return ""
+}
+
+// ExistingArtifact recovers a verified upload from this bot's own delivery
+// receipt. A reconciled run never uploads again merely because it was restarted.
+func (p *Publisher) ExistingArtifact(ctx context.Context, session, run, id, sha string) (attachments.Artifact, bool, error) {
+	for _, post := range p.Posts {
+		r, ok := p.receipt(post)
+		if !ok || r.SessionID != session || r.RunID != run || r.Hash != attachments.Hash([]byte(post.Message)) {
+			continue
+		}
+		for _, artifact := range r.Attachments {
+			if artifact.ArtifactID != id {
+				continue
+			}
+			if artifact.SHA256 != sha {
+				return artifact, false, ErrConflict
+			}
+			valid, err := p.verified(ctx, post, artifact)
+			if err != nil {
+				return artifact, false, err
+			}
+			if valid {
+				return artifact, true, nil
+			}
+		}
+	}
+	return attachments.Artifact{}, false, nil
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/orpheus-agents/orpheus-mattermost/internal/config"
+	"github.com/orpheus-agents/orpheus-mattermost/internal/mattermost"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/orpheus"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/service"
 )
@@ -27,9 +29,11 @@ func main() {
 }
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: orpheus-mattermost serve|validate|healthcheck")
+		return errors.New("usage: orpheus-mattermost serve|validate|healthcheck|export-checkpoint")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
+	workflow := flags.String("workflow", "", "workflow ID for checkpoint export")
+	epoch := flags.String("epoch", "", "new ownership operation UUID")
 	address := flags.String("url", healthURL(), "health endpoint")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
@@ -62,6 +66,8 @@ func run(args []string) error {
 			_, err = fmt.Fprintln(os.Stdout, "Configuration valid.")
 		}
 		return err
+	case "export-checkpoint":
+		return exportCheckpoint(ctx, *workflow, *epoch)
 	case "serve":
 		return serve(ctx)
 	default:
@@ -139,4 +145,36 @@ func healthURL() string {
 		host = "::1"
 	}
 	return "http://" + net.JoinHostPort(host, port) + "/healthz"
+}
+
+// Export has read-only interfaces and never starts the runtime/ingress.
+func exportCheckpoint(ctx context.Context, workflow, epoch string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	for _, w := range cfg.Workflows {
+		if w.ID != workflow {
+			continue
+		}
+		token, err := config.Secret(cfg.Orpheus.TokenEnv)
+		if err != nil {
+			return err
+		}
+		api, err := orpheus.New(cfg, token)
+		if err != nil {
+			return err
+		}
+		token, err = config.Secret(w.Mattermost.TokenEnv)
+		if err != nil {
+			return err
+		}
+		mm := mattermost.New(w.Mattermost.BaseURL, token, cfg.HTTPTimeout.Value())
+		checkpoint, err := service.ExportCheckpoint(ctx, w, api, mm, epoch)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(checkpoint)
+	}
+	return errors.New("checkpoint workflow not found")
 }
