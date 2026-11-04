@@ -314,15 +314,12 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 		if err = send("run_status", appendCost(text), nil); err != nil {
 			return err
 		}
-		return p.CleanupProgress(ctx, s.ID, r.ID)
+		return nil
 	}
 	if !hasAnswer && !stopped {
 		if err = send("empty_result", appendCost("Run finished without a text answer or files."), nil); err != nil {
 			return err
 		}
-	}
-	if enabled {
-		return p.CleanupProgress(ctx, s.ID, r.ID)
 	}
 	return nil
 }
