@@ -360,6 +360,7 @@ func (b Builder) BuildMessages(ctx context.Context, key Key, channel mattermost.
 			}
 			chosen := initialContext(eligible, mandatory, key.Root, budget)
 			e := Envelope{Schema: 1, Source: key.Source, Workflow: key.Workflow, Revision: b.Workflow.EffectiveRevision, Channel: key.Channel, Root: key.Root, Anchor: anchor.ID, WindowEnd: cutoff, Kind: "initial", Render: Render{renderVersion, b.Workflow.MaxPostChars, *b.Workflow.SendCommentary}}
+			e.LocalFiles = b.Workflow.Access != nil && b.Workflow.Access.LocalFiles
 			e.ContextStart = b.ContextStart
 			if b.TriggerOnly {
 				e.ContextStart = &ContextStart{CreatedAt: anchor.CreateAt, PostID: anchor.ID}

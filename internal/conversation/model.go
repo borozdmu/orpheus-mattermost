@@ -70,6 +70,7 @@ func (k Key) Invocation(anchor string) uuid.UUID {
 }
 
 type Envelope struct {
+	LocalFiles    bool                `json:"local_files,omitzero"`
 	AccessContext *api.AccessContext  `json:"access_context,omitzero"`
 	AccessProof   *AccessProof        `json:"access_proof,omitzero"`
 	ContextStart  *ContextStart       `json:"context_start,omitzero"`
@@ -149,6 +150,9 @@ func (r Run) Terminal() bool {
 }
 
 type Session struct {
+	// LocalFiles identifies the connector's pinned local export hook in the
+	// immutable session configuration, including inputs accepted before the flag.
+	LocalFiles        bool
 	Model             string
 	ID                string
 	AllowMultipleRuns bool

@@ -38,7 +38,7 @@ type localRoundTrip func(*http.Request) (*http.Response, error)
 func (f localRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestLocalOutputPublicationAndRestart(t *testing.T) {
-	for _, scenario := range []string{"success", "bad-hash", "foreign-run", "foreign-file-id", "audience-revoked", "missing-hook", "unsealed"} {
+	for _, scenario := range []string{"success", "bad-hash", "foreign-run", "foreign-file-id", "audience-revoked", "missing-hook", "running-hook", "failed-hook", "truncated-hook", "unsealed"} {
 		t.Run(scenario, func(t *testing.T) {
 			data := []byte("Крокус [EMAIL_ADDRESS_synthetic]")
 			file := attachments.Artifact{ArtifactID: strings.Repeat("a", 64), Name: "document-01.text-version.txt", SHA256: attachments.Hash(data), Size: int64(len(data))}
@@ -57,6 +57,14 @@ func TestLocalOutputPublicationAndRestart(t *testing.T) {
 			if scenario == "missing-hook" {
 				run.Hooks = nil
 			}
+			switch scenario {
+			case "running-hook":
+				run.Hooks[0].Status = "running"
+			case "failed-hook":
+				run.Hooks[0].Status = "failed"
+			case "truncated-hook":
+				run.Hooks[0].Completeness = "truncated"
+			}
 			mm := &localUploadMM{fakeSource: &fakeSource{bot: "bot"}}
 			e := &Engine{MM: mm}
 			p := &delivery.Publisher{MM: mm, BotID: "bot", Key: conversation.Key{Source: "source", Workflow: "legal", Channel: "channel", Root: "root"}}
@@ -68,7 +76,9 @@ func TestLocalOutputPublicationAndRestart(t *testing.T) {
 				}
 				return nil
 			}
+			relayCalls := 0
 			client := &http.Client{Transport: localRoundTrip(func(req *http.Request) (*http.Response, error) {
+				relayCalls++
 				var b []byte
 				switch req.URL.Path {
 				case "/manifest":
@@ -89,6 +99,9 @@ func TestLocalOutputPublicationAndRestart(t *testing.T) {
 			if scenario != "success" {
 				if err == nil || mm.uploads != 0 {
 					t.Fatal("unsafe output uploaded", err, mm.uploads)
+				}
+				if strings.HasSuffix(scenario, "-hook") && relayCalls != 0 {
+					t.Fatal("incomplete hook reached the relay", relayCalls)
 				}
 				return
 			}
@@ -112,5 +125,58 @@ func TestLocalOutputPublicationAndRestart(t *testing.T) {
 				t.Fatal("duplicate delivery or missing audience check", mm.uploads, mm.calls, gates)
 			}
 		})
+	}
+}
+
+func TestOldLocalRunReplayDoesNotAcquireFileExport(t *testing.T) {
+	e, _, mm, _, key := fixture(t)
+	env := input("initial")
+	env.Source, env.Workflow, env.Channel, env.Root = key.Source, key.Workflow, key.Channel, key.Root
+	run := conversation.Run{ID: "run", Status: "completed", AgentStatus: "completed", FinalMessageID: "answer"}
+	session := conversation.Session{ID: "session", Messages: []conversation.Message{
+		{RunID: run.ID, Role: "user", Metadata: testMetadata(env)},
+		{ID: "answer", RunID: run.ID, Role: "assistant", Kind: "answer", Text: "Already delivered", Position: 1},
+	}}
+	p := &delivery.Publisher{MM: mm, BotID: mm.bot, Key: key}
+	for _, part := range delivery.Parts(key, session.ID, run.ID, "answer", "Already delivered", env.Render, nil) {
+		if err := p.Publish(t.Context(), part); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := e.Config.Workflows[0]
+	w.Access = &config.Access{ChannelOnly: true, LocalServices: true, LocalFiles: true}
+	// Old metadata deliberately has no current access proof. BeforeCreate would
+	// fail immediately; a delivered receipt must not reach that guard or relay.
+	for range 2 {
+		recovered := &delivery.Publisher{MM: mm, BotID: mm.bot, Key: key}
+		if err := recovered.Refresh(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.publish(t.Context(), recovered, session, run, w); err != nil {
+			t.Fatal("old receipt acquired a new export or publication", err)
+		}
+		if recovered.NoticeExists("attachments_failed", run.ID) || e.outputQueue[run.ID] || mm.calls != 1 {
+			t.Fatal("replay changed a delivered run", mm.calls, e.outputQueue)
+		}
+	}
+}
+
+func TestFrozenLocalExportCannotBeDisabledByWorkflow(t *testing.T) {
+	for _, metadataFlag := range []bool{false, true} {
+		for _, currentFlag := range []bool{false, true} {
+			e, _, mm, _, key := fixture(t)
+			env := input("initial")
+			env.LocalFiles = metadataFlag
+			run := conversation.Run{ID: "run", Status: "completed", AgentStatus: "completed"}
+			// The immutable session hook identifies already-admitted inputs that
+			// predate the metadata flag, even if after_run has no result at all.
+			session := conversation.Session{ID: "session", LocalFiles: !metadataFlag, Messages: []conversation.Message{{RunID: run.ID, Role: "user", Metadata: testMetadata(env)}}}
+			w := e.Config.Workflows[0]
+			w.Access = &config.Access{LocalServices: true, LocalFiles: currentFlag}
+			p := &delivery.Publisher{MM: mm, BotID: mm.bot, Key: key}
+			if err := e.publish(t.Context(), p, session, run, w); err == nil || !e.outputQueue[run.ID] || mm.calls != 0 {
+				t.Fatal("incomplete frozen export bypassed the publication guard", metadataFlag, currentFlag, err)
+			}
+		}
 	}
 }

@@ -181,6 +181,12 @@ Only the relay's text derivative formats are accepted. Existing bot receipts
 prevent duplicate uploads after reconciliation. Incomplete exports are not
 published. Transport secrets and original inputs never enter this output path.
 
+The accepted input freezes whether the run exports local files. Reconciliation
+also recognizes the exact pinned local export hook in immutable session history
+for inputs accepted before that flag existed. Enabling output files later does
+not reinterpret old hookless runs or add failure notices to delivered answers.
+Runs admitted with local files still require a complete export before publication.
+
 ## External agent memory client
 
 A selected static service can provide `AGENT_MEMORY_URL`, `AGENT_MEMORY_KEY`,
