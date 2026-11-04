@@ -161,6 +161,22 @@ func buildJoined(b Builder, ctx context.Context, key Key, channel mattermost.Cha
 	return env, out.String(), err
 }
 
+func TestAdmissionFreezesLocalFiles(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		b, key, _ := builder(t)
+		b.Workflow.Access = &config.Access{LocalServices: true, LocalFiles: enabled}
+		post := mattermost.Post{ID: key.Root, ChannelID: key.Channel, UserID: id(3), CreateAt: 1000, Message: "@orpheus help"}
+		env, messages, err := b.BuildMessages(t.Context(), key, mattermost.Channel{Type: "O"}, []mattermost.Post{post}, Snapshot{}, true, time.Unix(10, 0))
+		if err != nil || len(messages) == 0 || env.LocalFiles != enabled {
+			t.Fatal("admission did not freeze local output policy", env.LocalFiles, len(messages), err)
+		}
+		b.Workflow.Access.LocalFiles = !enabled
+		if env.LocalFiles != enabled {
+			t.Fatal("accepted contract changed with workflow")
+		}
+	}
+}
+
 func firstPostFrontMatter(t *testing.T, text string) map[string]any {
 	t.Helper()
 	body, ok := strings.CutPrefix(text, "---\n")

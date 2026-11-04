@@ -238,8 +238,11 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 	slices.SortStableFunc(messages, func(a, b conversation.Message) int { return a.Position - b.Position })
 	var output attachments.Output
 	stopped := p.NoticeExists("attachments_failed", r.ID)
-	if r.Terminal() && !stopped && (!w.Access.LocalPolicy() || w.Access.LocalFiles) {
-		if w.Access != nil && w.Access.LocalFiles {
+	// Export belongs to the accepted run, not today's workflow. Old local-policy
+	// runs without an export hook must not acquire a new failure notice on replay.
+	localFiles := env.LocalFiles || s.LocalFiles
+	if r.Terminal() && !stopped && (!w.Access.LocalPolicy() || localFiles) {
+		if localFiles {
 			output, err = e.localOutput(ctx, p, s, r, env)
 		} else {
 			output, err = hookOutput(s, r, env, e.Bot.ID)

@@ -16,8 +16,33 @@ import (
 	"github.com/orpheus-agents/orpheus-mattermost/internal/attachments"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/config"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/conversation"
+	"github.com/orpheus-agents/orpheus-mattermost/internal/sandbox"
 	api "github.com/orpheus-agents/orpheus/client"
 )
+
+func TestSessionRecoversOnlyExactPinnedLocalExport(t *testing.T) {
+	for _, hook := range []string{"", sandbox.BeforeRun(), sandbox.AfterRun(), sandbox.LocalBeforeRun(), sandbox.LocalAfterRun(), sandbox.LocalAfterRun() + "# changed\n"} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
+				"id": uuid.NewString(), "namespace": "mattermost/assistant",
+				"configuration": map[string]any{"hooks": map[string]any{"after_run": hook}},
+			}}})
+		}))
+		client, err := New(config.Config{Orpheus: config.Endpoint{BaseURL: server.URL}}, "synthetic")
+		if err != nil {
+			server.Close()
+			t.Fatal(err)
+		}
+		sessions, err := client.Sessions(t.Context(), "mattermost/assistant", "")
+		server.Close()
+		if err != nil || len(sessions) != 1 {
+			t.Fatal("session load failed", err)
+		}
+		if sessions[0].LocalFiles != (hook == sandbox.LocalAfterRun()) {
+			t.Fatal("immutable export configuration was lost or misclassified")
+		}
+	}
+}
 
 func TestPaginationBeyond200Items(t *testing.T) {
 	for _, kind := range []string{"sessions", "runs", "history"} {
