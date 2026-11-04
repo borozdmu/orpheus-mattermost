@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"sync"
+ "strings"
+ "github.com/orpheus-agents/orpheus-mattermost/internal/transcription"
 
 	"github.com/orpheus-agents/orpheus-mattermost/internal/agentbox"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/config"
@@ -41,6 +43,14 @@ func (m *Manager) Init(ctx context.Context) error {
 		}
 		mm := mattermost.New(endpoint.BaseURL, token, cfg.HTTPTimeout.Value())
 		engine := &Engine{Config: cfg, MM: mm, API: m.API}
+        if cfg.Transcription.URL != "" {
+            raw, err := os.ReadFile(os.Getenv("TRANSCRIPTION_API_KEY_FILE"))
+            if err != nil || len(raw) > 4096 { return errors.New("transcription credential file unavailable") }
+            key := strings.TrimSpace(string(raw))
+            if key == "" || strings.ContainsAny(key, "\r\n\x00") { return errors.New("invalid transcription credential") }
+            engine.Voice = transcription.New(cfg.Transcription.URL, cfg.Transcription.Model, key, cfg.Transcription.Timeout)
+        }
+
 		if os.Getenv("AGENTBOX_API_KEY") != "" {
 			sandbox, err := agentbox.New(cfg, m.API, mm, m.Logger)
 			if err != nil {

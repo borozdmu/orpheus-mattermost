@@ -156,7 +156,7 @@ func (r *Runtime) Handler() http.Handler {
 	return mux
 }
 func reloadCompatible(a, b config.Config) bool {
-	return a.Orpheus == b.Orpheus && a.AgentBoxAPIURL == b.AgentBoxAPIURL && a.Listen == b.Listen && a.HTTPTimeout == b.HTTPTimeout && a.MaxRequestBytes == b.MaxRequestBytes
+	return a.Transcription == b.Transcription && a.Orpheus == b.Orpheus && a.AgentBoxAPIURL == b.AgentBoxAPIURL && a.Listen == b.Listen && a.HTTPTimeout == b.HTTPTimeout && a.MaxRequestBytes == b.MaxRequestBytes
 }
 func errorClass(err error) string {
 	switch {

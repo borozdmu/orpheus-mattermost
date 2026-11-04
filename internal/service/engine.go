@@ -49,6 +49,8 @@ type Sandbox interface {
 }
 
 type pending struct {
+	VoicePrepared bool
+
 	Channel                   mattermost.Channel
 	TriggerPosts              []mattermost.Post
 	Workflow                  config.Workflow
@@ -56,7 +58,13 @@ type pending struct {
 	Session, Run, Predecessor string
 	Messages                  []conversation.InputMessage
 }
+type VoiceTranscriber interface {
+	Transcribe(context.Context, []byte) (string, error)
+}
+
 type Engine struct {
+	Voice VoiceTranscriber
+
 	Config       config.Config
 	MM           MM
 	API          API
@@ -726,6 +734,11 @@ func (e *Engine) submit(ctx context.Context, key conversation.Key, p pending, cu
 		if err := projectLocalInput(ctx, &p, e.MM); err != nil {
 			return err
 		}
+	}
+	if p.Workflow.TranscribeVoice && !p.VoicePrepared {
+		if err := projectVoiceInput(ctx, &p, e.MM, e.Voice, e.Config.MaxRequestBytes); err != nil { return err }
+		p.VoicePrepared = true
+		e.set(key, p)
 	}
 	if p.Run != "" && len(p.Envelope.Request.Files) > 0 {
 		if e.Sandbox == nil {

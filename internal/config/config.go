@@ -50,6 +50,8 @@ type Links struct {
 }
 
 type Workflow struct {
+	TranscribeVoice bool `yaml:"transcribe_voice" json:"transcribe_voice,omitzero"`
+
 	AdmissionCheckpoint *AdmissionCheckpoint `yaml:"admission_checkpoint" json:"admission_checkpoint,omitzero"`
 
 	Access                *Access   `yaml:"access_context" json:"access_context,omitzero"`
@@ -86,6 +88,8 @@ type Workflow struct {
 	EffectiveRevision     string    `yaml:"-"`
 }
 type Config struct {
+	Transcription Transcription
+
 	AgentBoxAPIURL     string
 	Orpheus            Endpoint
 	Workflows          []Workflow
@@ -139,6 +143,9 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	if err := cfg.HTTPTimeout.UnmarshalText([]byte(value("HTTP_TIMEOUT", "30s"))); err != nil {
 		return Config{}, errors.New("HTTP_TIMEOUT must be a duration")
 	}
+	var err error
+	cfg.Transcription, err = loadTranscription(func(key string) string { return value(key, "") })
+	if err != nil { return Config{}, err }
 	entries, err := os.ReadDir(cfg.WorkflowsDir)
 	if err != nil {
 		return Config{}, fmt.Errorf("read workflows directory: %w", err)
@@ -218,6 +225,7 @@ func (c *Config) validate() error {
 	dm := map[Endpoint]bool{}
 	for i := range c.Workflows {
 		w := &c.Workflows[i]
+		if w.TranscribeVoice && (w.Access.LocalPolicy() || c.Transcription.URL == "") { return errors.New("voice workflows require transcription settings; local-policy input is owned by its local processor") }
 		if !validURL(w.Mattermost.BaseURL) || !envPattern.MatchString(w.Mattermost.TokenEnv) {
 			return fmt.Errorf("workflow %s: mattermost.base_url and token_env are required", w.ID)
 		}

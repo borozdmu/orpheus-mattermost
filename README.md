@@ -57,6 +57,12 @@ immediate and batches containing files wait for the next run's `before_run`.
 through ordinary hooks work without these variables. There is no automatic SDK
 recovery of output manifests, reupload, or pause sweep.
 
+Optional `transcribe_voice: true` workflows transcribe audio attachments before
+admission through a configured HTTPS speech endpoint. The transcript stays with
+its author and original attachment; credentials remain in the connector.
+Local-policy workflows use their own input processor so masking still precedes
+model access. See [voice configuration](docs/CONFIGURATION.md#voice-input).
+
 The application does not read `.env` itself; Docker
 Compose supplies it. See [configuration](docs/CONFIGURATION.md) and the
 [sandbox file protocol](docs/FILES.md).

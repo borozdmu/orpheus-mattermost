@@ -392,3 +392,25 @@ or original channel files. Output is text only. The policy socket must permit
 both dispatch and publication; unavailable or denying policy blocks either.
 Only configure services whose credentials are intended for this exact local
 owner policy. This mode does not request provider-issued credentials.
+
+## Voice input
+
+For ordinary workflows, set `transcribe_voice: true` and provide process settings
+`TRANSCRIPTION_URL`, `TRANSCRIPTION_MODEL`, `TRANSCRIPTION_API_KEY_FILE` and optional
+`TRANSCRIPTION_TIMEOUT` (default 2m, permitted 1s–5m). URLs require HTTPS; loopback
+HTTP is allowed for local installations. The credential file is read only by the
+connector and is never sent to the sandbox. Changing process settings requires a
+restart; enabling voice changes the workflow revision.
+
+Attachments with an `audio/` MIME type are fetched only after confirming their
+post version, association and current access. The recognizer receives at most
+20 MB per file, also respecting the workflow attachment limits. It must return
+nonempty UTF-8 text of at most 64 KiB. Unsupported/overlong audio or a recognition
+failure does not submit partial input. No HTTP redirect or transport retry is
+allowed. A prepared transcript is frozen before admission; authoritative accepted
+history prevents a duplicate run after a lost response.
+
+Original attachments remain available through the normal file protocol. Each
+transcript is appended to its author's message. Local-policy workflows cannot
+use this option: their configured local input processor owns audio extraction and
+masking, and must never send original audio to the model.
