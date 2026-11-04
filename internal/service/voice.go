@@ -25,7 +25,9 @@ func projectVoiceInput(ctx context.Context, p *pending, mm MM, voice VoiceTransc
 		if !strings.HasPrefix(mime, "audio/") {
 			continue
 		}
-        if input.Size > 20_000_000 || input.Status == "file_limit_exceeded" { return transcription.ErrAudio }
+		if input.Size > 20_000_000 || input.Status == "file_limit_exceeded" {
+			return transcription.ErrAudio
+		}
 		if !ok || voice == nil || input.Status != "" {
 			return errors.New("audio source or transcription unavailable")
 		}

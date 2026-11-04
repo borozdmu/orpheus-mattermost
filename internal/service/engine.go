@@ -20,7 +20,7 @@ import (
 	"github.com/orpheus-agents/orpheus-mattermost/internal/delivery"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/mattermost"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/orpheus"
- "github.com/orpheus-agents/orpheus-mattermost/internal/transcription"
+	"github.com/orpheus-agents/orpheus-mattermost/internal/transcription"
 	api "github.com/orpheus-agents/orpheus/client"
 )
 
@@ -738,12 +738,18 @@ func (e *Engine) submit(ctx context.Context, key conversation.Key, p pending, cu
 	}
 	if p.Workflow.TranscribeVoice && !p.VoicePrepared {
 		if err := projectVoiceInput(ctx, &p, e.MM, e.Voice, e.Config.MaxRequestBytes); err != nil {
-            if !errors.Is(err, transcription.ErrAudio) { return err }
-            publisher := &delivery.Publisher{MM:e.MM, Key:key, BotID:e.Bot.ID}
-            if readErr := publisher.Refresh(ctx); readErr != nil { return readErr }
-            err = e.reject(ctx, publisher, p.Envelope, p.Messages, "Could not transcribe this recording. Check its format and size, or send the text.")
-            if err == nil { e.clear(key) }
-            return err
+			if !errors.Is(err, transcription.ErrAudio) {
+				return err
+			}
+			publisher := &delivery.Publisher{MM: e.MM, Key: key, BotID: e.Bot.ID}
+			if readErr := publisher.Refresh(ctx); readErr != nil {
+				return readErr
+			}
+			err = e.reject(ctx, publisher, p.Envelope, p.Messages, "Could not transcribe this recording. Check its format and size, or send the text.")
+			if err == nil {
+				e.clear(key)
+			}
+			return err
 		}
 		p.VoicePrepared = true
 		e.set(key, p)

@@ -2,7 +2,7 @@ package transcription
 
 import (
 	"context"
- "errors"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -110,10 +110,12 @@ func TestCancelledRequestAndInvalidAudio(t *testing.T) {
 }
 
 func TestAudioRejectionIsDifferentFromCapacity(t *testing.T) {
- for _, status := range []int{400,413,415,422,401,429,503} {
-  s:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,_ *http.Request){w.WriteHeader(status)}))
-  _,err:=New(s.URL,"model","secret",time.Second).Transcribe(t.Context(),[]byte("OggS-test"))
-  s.Close()
-  if errors.Is(err,ErrAudio)!=(status==400||status==413||status==415||status==422) {t.Fatalf("status=%d error=%v",status,err)}
- }
+	for _, status := range []int{400, 413, 415, 422, 401, 429, 503} {
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) }))
+		_, err := New(s.URL, "model", "secret", time.Second).Transcribe(t.Context(), []byte("OggS-test"))
+		s.Close()
+		if errors.Is(err, ErrAudio) != (status == 400 || status == 413 || status == 415 || status == 422) {
+			t.Fatalf("status=%d error=%v", status, err)
+		}
+	}
 }
