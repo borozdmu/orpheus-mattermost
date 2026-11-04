@@ -135,3 +135,10 @@ variables the hook behaves as before. Partial configuration or a bad checksum
 fails preparation. This does not enable or expose Mattermost history or files
 across channels; the common factual store and agent policy live outside this
 connector.
+
+## Deployment notes for cost-enabled builds
+
+Builds with `BOT_COST_FILE` support need read access to the cost file and traversal
+access to its mounted directory. See [cost-file permissions](docs/COST_FILE_PERMISSIONS.md)
+for installation, repair and acceptance checks. This guide applies to the
+cost-enabled runtime; it does not enable that feature in other builds.
