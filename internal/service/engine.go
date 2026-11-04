@@ -736,7 +736,9 @@ func (e *Engine) submit(ctx context.Context, key conversation.Key, p pending, cu
 		}
 	}
 	if p.Workflow.TranscribeVoice && !p.VoicePrepared {
-		if err := projectVoiceInput(ctx, &p, e.MM, e.Voice, e.Config.MaxRequestBytes); err != nil { return err }
+		if err := projectVoiceInput(ctx, &p, e.MM, e.Voice, e.Config.MaxRequestBytes); err != nil {
+			return err
+		}
 		p.VoicePrepared = true
 		e.set(key, p)
 	}

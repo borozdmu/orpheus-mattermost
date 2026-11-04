@@ -145,7 +145,9 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	}
 	var err error
 	cfg.Transcription, err = loadTranscription(func(key string) string { return value(key, "") })
-	if err != nil { return Config{}, err }
+	if err != nil {
+		return Config{}, err
+	}
 	entries, err := os.ReadDir(cfg.WorkflowsDir)
 	if err != nil {
 		return Config{}, fmt.Errorf("read workflows directory: %w", err)
@@ -225,7 +227,9 @@ func (c *Config) validate() error {
 	dm := map[Endpoint]bool{}
 	for i := range c.Workflows {
 		w := &c.Workflows[i]
-		if w.TranscribeVoice && (w.Access.LocalPolicy() || c.Transcription.URL == "") { return errors.New("voice workflows require transcription settings; local-policy input is owned by its local processor") }
+		if w.TranscribeVoice && (w.Access.LocalPolicy() || c.Transcription.URL == "") {
+			return errors.New("voice workflows require transcription settings; local-policy input is owned by its local processor")
+		}
 		if !validURL(w.Mattermost.BaseURL) || !envPattern.MatchString(w.Mattermost.TokenEnv) {
 			return fmt.Errorf("workflow %s: mattermost.base_url and token_env are required", w.ID)
 		}

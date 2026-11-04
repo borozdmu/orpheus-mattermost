@@ -20,7 +20,9 @@ func loadTranscription(getenv func(string) string) (Transcription, error) {
 	if c.URL == "" && c.Model == "" && timeout == "" {
 		return c, nil
 	}
-	if !validURL(c.URL) { return c, errors.New("invalid TRANSCRIPTION_URL") }
+	if !validURL(c.URL) {
+		return c, errors.New("invalid TRANSCRIPTION_URL")
+	}
 	normalized := strings.TrimSpace(c.URL)
 	var err error
 	u, _ := url.Parse(normalized)
