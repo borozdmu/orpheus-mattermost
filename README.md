@@ -9,7 +9,7 @@
 
 # Orpheus + Mattermost
 
-A Go connector for Mattermost. It requires Orpheus `v0.3.0` or newer.
+A Go connector for Mattermost. It requires Orpheus `v0.6.0` or newer.
 It routes thread messages,
 prepares conversation context and attachments, delivers clarifications to running
 agents, and publishes progress, answers, and output files.
@@ -38,11 +38,11 @@ and anchor post; they do not replace the accepted input snapshot.
 3. Use a Linux AgentBox template with `python3` (3.9 or later). File hooks are
    embedded in the connector and installed automatically; no template rebuild or
    pip dependencies are needed.
-4. Configure the Orpheus profile. Allow the Mattermost token's variable name in
-   API and worker's `HARNESS_ENV_ALLOWLIST` and provide its value to the worker.
-   To pass tool credentials to the agent, list their worker ENV names in the
-   workflow's `env_from` and allow them in the same allowlist. The connector does
-   not need their values.
+4. Configure the Orpheus profile and service catalog. Include the Mattermost
+   token's ENV name in a service or `HARNESS_ENV_ALLOWLIST` on API and worker,
+   and supply its value to the worker for file hooks. Select tool services in
+   the workflow's `services`, for example `services: [gitlab]`. Optional
+   `env_from` adds individual ENV names. The connector does not need tool values.
 5. Run `make start`; use `make stop` to shut down.
 
 Process settings come from ENV. Mattermost URL and token reference, workflow policy,
@@ -180,3 +180,22 @@ channel access before upload and publication, and uploads using its own token.
 Only the relay's text derivative formats are accepted. Existing bot receipts
 prevent duplicate uploads after reconciliation. Incomplete exports are not
 published. Transport secrets and original inputs never enter this output path.
+
+## External agent memory client
+
+A selected static service can provide `AGENT_MEMORY_URL`, `AGENT_MEMORY_KEY`,
+`AGENT_MEMORY_CLIENT_B64`, and `AGENT_MEMORY_CLIENT_SHA256`. Before each run,
+the file hook verifies the bundled client checksum and installs it as
+`.agent-memory/memory.py`, together with a private current session/run context.
+The service key remains in the selected service environment. Without these
+variables the hook behaves as before. Partial configuration or a bad checksum
+fails preparation. This does not enable or expose Mattermost history or files
+across channels; the common factual store and agent policy live outside this
+connector.
+
+## Deployment notes for cost-enabled builds
+
+Builds with `BOT_COST_FILE` support need read access to the cost file and traversal
+access to its mounted directory. See [cost-file permissions](docs/COST_FILE_PERMISSIONS.md)
+for installation, repair and acceptance checks. This guide applies to the
+cost-enabled runtime; it does not enable that feature in other builds.
