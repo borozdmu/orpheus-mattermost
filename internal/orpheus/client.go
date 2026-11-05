@@ -341,7 +341,11 @@ func (c *Client) Submit(ctx context.Context, w config.Workflow, e conversation.E
 	if localPolicy {
 		// Authorization and input projection stay local. Only explicitly selected
 		// services may receive credentials; transport secrets and hooks stay local.
-		access = nil
+		if !w.Access.LocalProviderContext {
+			access = nil
+		} else if access == nil {
+			return conversation.Accepted{}, errors.New("verified provider context required")
+		}
 		env = map[string]string{}
 		envFrom = []string{}
 	}
@@ -370,7 +374,7 @@ func (c *Client) Submit(ctx context.Context, w config.Workflow, e conversation.E
 		if localPolicy {
 			conf.Hooks = nil
 			if w.Access.LocalServices {
-				conf.Hooks = &api.HooksInput{BeforeRun: new(sandbox.LocalBeforeRun()), TimeoutSeconds: &w.HookTimeoutSeconds}
+				conf.Hooks = &api.HooksInput{BeforeRun: new(sandbox.LocalBeforeRun(w.LocalBeforeRunPython)), TimeoutSeconds: &w.HookTimeoutSeconds}
 				if w.Access.LocalFiles {
 					conf.Hooks.AfterRun = new(sandbox.LocalAfterRun())
 				}

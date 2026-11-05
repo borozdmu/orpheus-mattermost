@@ -65,9 +65,11 @@ func projectAccess(binding config.Access, audience []string, actor string) (api.
 		if actor == peer.ID || !seen[peer.ID] || len(audience) != len(binding.IdentityProjection.Subjects)+2 {
 			return nil, nil, errors.New("protected peer or fixed audience mismatch")
 		}
-		scope[peer.Field], err = json.Marshal(peer.ID)
-		if err != nil {
-			return nil, nil, err
+		if !binding.LocalProviderContext {
+			scope[peer.Field], err = json.Marshal(peer.ID)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 	}
 	actorID, err := binding.IdentityProjection.Subjects[actor].MarshalJSON()

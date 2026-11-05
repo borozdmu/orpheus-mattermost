@@ -14,14 +14,15 @@ import (
 // Access maps confirmed source identities into an integration's service context.
 // The provider owns the meaning of fields and mapped identities.
 type Access struct {
-	LocalFiles         bool               `yaml:"local_files,omitempty" json:"local_files,omitempty"`
-	ChannelOnly        bool               `yaml:"channel_only,omitempty" json:"channel_only,omitempty"`
-	LocalServices      bool               `yaml:"local_services,omitempty" json:"local_services,omitempty"`
-	Peer               *PeerRecipient     `yaml:"peer_recipient,omitempty" json:"peer_recipient,omitempty"`
-	Namespace          string             `yaml:"namespace" json:"namespace"`
-	BotID              string             `yaml:"bot_id" json:"bot_id"`
-	ScopeContext       map[string]any     `yaml:"scope_context" json:"scope_context"`
-	IdentityProjection IdentityProjection `yaml:"identity_projection" json:"identity_projection"`
+	LocalProviderContext bool               `yaml:"local_provider_context,omitempty" json:"local_provider_context,omitempty"`
+	LocalFiles           bool               `yaml:"local_files,omitempty" json:"local_files,omitempty"`
+	ChannelOnly          bool               `yaml:"channel_only,omitempty" json:"channel_only,omitempty"`
+	LocalServices        bool               `yaml:"local_services,omitempty" json:"local_services,omitempty"`
+	Peer                 *PeerRecipient     `yaml:"peer_recipient,omitempty" json:"peer_recipient,omitempty"`
+	Namespace            string             `yaml:"namespace" json:"namespace"`
+	BotID                string             `yaml:"bot_id" json:"bot_id"`
+	ScopeContext         map[string]any     `yaml:"scope_context" json:"scope_context"`
+	IdentityProjection   IdentityProjection `yaml:"identity_projection" json:"identity_projection"`
 }
 
 // LocalPolicy keeps input processing and authorization on the connector host.
@@ -91,6 +92,12 @@ func (id *SubjectID) UnmarshalYAML(node *yaml.Node) error {
 }
 
 func (a Access) Validate() error {
+	if a.LocalProviderContext {
+		space, ok := a.ScopeContext["policy_space_id"].(string)
+		if !a.LocalServices || a.ChannelOnly || a.Peer == nil || !ok || !strings.HasSuffix(space, "."+a.Peer.ID) {
+			return errors.New("local provider context requires a registered space pinned to the verified peer")
+		}
+	}
 	if a.LocalFiles && !a.LocalServices {
 		return errors.New("local files require local services")
 	}

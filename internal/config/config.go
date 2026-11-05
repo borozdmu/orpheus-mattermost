@@ -50,6 +50,9 @@ type Links struct {
 }
 
 type Workflow struct {
+	// LocalBeforeRunPython is trusted administrator code, never message content.
+	LocalBeforeRunPython string `yaml:"local_before_run_python" json:"local_before_run_python,omitzero"`
+
 	TranscribeVoice bool `yaml:"transcribe_voice" json:"transcribe_voice,omitzero"`
 
 	AdmissionCheckpoint *AdmissionCheckpoint `yaml:"admission_checkpoint" json:"admission_checkpoint,omitzero"`
@@ -342,6 +345,9 @@ func (c *Config) validate() error {
 		}
 		if w.Links.MaxLinks < 1 || w.Links.MaxLinks > 5 || w.Links.MaxPosts < 2 || w.Links.MaxPosts > 20 {
 			return errors.New("invalid link expansion limits")
+		}
+		if w.LocalBeforeRunPython != "" && (len(w.LocalBeforeRunPython) > 64<<10 || len(sandbox.LocalBeforeRun(w.LocalBeforeRunPython)) > 64<<10 || strings.ContainsRune(w.LocalBeforeRunPython, 0) || w.Access == nil || !w.Access.LocalServices) {
+			return errors.New("local before-run Python requires local services and at most 64 KiB without NUL")
 		}
 		if a := w.Access; a != nil {
 			if a.Peer != nil && slices.Contains(w.TriggerBotIDs, a.Peer.ID) {
