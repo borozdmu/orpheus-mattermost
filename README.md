@@ -171,6 +171,19 @@ single hidden workspace directories; every client receives a private
 `current-run.json`. The hook has no Mattermost credential or source attachment.
 Unselected, modified or escaping tool definitions fail closed.
 
+`access_context.local_provider_context: true` also forwards the observed identity
+and reader projection to selected credential providers. It requires local services
+and a `scope_context.policy_space_id` ending in `.` followed by the configured peer
+bot ID. The peer must still be observed in the exact channel audience; it cannot
+author inputs. Its separate peer field is omitted from the provider envelope.
+Transport credentials remain absent, and local input processing is unchanged.
+
+`local_before_run_python` is optional trusted administrator Python, not message
+content. It runs only after the standard local initialization succeeds. It requires
+local services, has a 64 KiB source limit, forbids NUL, and must fit the 64 KiB
+encoded hook limit. Initialization or bootstrap failure stops the run. It does not
+replace the local export hook. Changes invalidate the workflow revision.
+
 `access_context.local_files: true` additionally requires exactly one selected tool
 with `after_run: true`. The after hook runs its service-pinned bytes, ignoring
 workspace edits. The tool must seal its approved results in the host relay.

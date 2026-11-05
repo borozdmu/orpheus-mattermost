@@ -589,3 +589,50 @@ func TestLocalServicesRejectsBeforeDispatchWhenPolicyUnavailable(t *testing.T) {
 		t.Fatal("dispatched with unavailable local policy")
 	}
 }
+
+func TestLocalProviderProjectionPinsPeerWithoutProviderField(t *testing.T) {
+	const peer = "pppppppppppppppppppppppppp"
+	for _, scenario := range []string{"valid", "missing peer", "peer author", "unmapped human"} {
+		t.Run(scenario, func(t *testing.T) {
+			_, _, mm, _, _, w := protectedFixture(t)
+			w.Access.Peer = &config.PeerRecipient{ID: peer, Field: "peer_id"}
+			w.Access.LocalServices, w.Access.LocalProviderContext = true, true
+			w.Access.ScopeContext["policy_space_id"] = "test." + peer
+			audience := append(slices.Clone(mm.audience), "nnnnnnnnnnnnnnnnnnnnnnnnnn", peer)
+			actor := mm.posts[0].UserID
+			switch scenario {
+			case "missing peer":
+				audience = audience[:len(audience)-1]
+			case "peer author":
+				actor = peer
+			case "unmapped human":
+				audience[2] = "zzzzzzzzzzzzzzzzzzzzzzzzzz"
+			}
+			scope, allowed, err := projectAccess(*w.Access, audience, actor)
+			if scenario != "valid" {
+				if err == nil {
+					t.Fatal("unverified projection admitted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, exists := scope["peer_id"]; exists {
+				t.Fatal("non-provider field included")
+			}
+			if string(scope["policy_space_id"]) != `"test.`+peer+`"` || string(scope["requester"]) != "42" {
+				t.Fatal("observed scope changed")
+			}
+			var readers []int
+			if json.Unmarshal(scope["readers"], &readers) != nil || !slices.Equal(readers, []int{42, 77}) {
+				t.Fatal("reader projection changed", readers)
+			}
+			for _, subject := range allowed {
+				if subject.ID == peer {
+					t.Fatal("peer became allowed author")
+				}
+			}
+		})
+	}
+}

@@ -21,7 +21,7 @@ import (
 )
 
 func TestSessionRecoversOnlyExactPinnedLocalExport(t *testing.T) {
-	for _, hook := range []string{"", sandbox.BeforeRun(), sandbox.AfterRun(), sandbox.LocalBeforeRun(), sandbox.LocalAfterRun(), sandbox.LocalAfterRun() + "# changed\n"} {
+	for _, hook := range []string{"", sandbox.BeforeRun(), sandbox.AfterRun(), sandbox.LocalBeforeRun(""), sandbox.LocalAfterRun(), sandbox.LocalAfterRun() + "# changed\n"} {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
 				"id": uuid.NewString(), "namespace": "mattermost/assistant",
@@ -504,5 +504,73 @@ func TestSubmitSeparatesSessionAndRunEnvironment(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestLocalProviderSubmitPreservesVerifiedContextAndLocalHooks(t *testing.T) {
+	for _, scenario := range []string{"verified", "missing context"} {
+		t.Run(scenario, func(t *testing.T) {
+			calls := 0
+			expected := &api.AccessContext{ScopeContext: api.AccessScopeContext{"policy_space_id": json.RawMessage(`"test.peer"`), "reader_user_ids": json.RawMessage(`[42]`)}}
+			server := httptest.NewServer(http.HandlerFunc(func(out http.ResponseWriter, r *http.Request) {
+				calls++
+				var body struct {
+					AccessContext     *api.AccessContext `json:"access_context"`
+					Env               map[string]string
+					EnvFrom           []string `json:"env_from"`
+					AllowMultipleRuns bool     `json:"allow_multiple_runs"`
+					Configuration     struct {
+						Hooks struct {
+							BeforeRun string `json:"before_run"`
+							AfterRun  string `json:"after_run"`
+						}
+						Sandbox struct {
+							EnvFrom  []string `json:"env_from"`
+							Services []string
+						}
+					}
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				got, _ := json.Marshal(body.AccessContext)
+				want, _ := json.Marshal(expected)
+				if string(got) != string(want) {
+					t.Error("verified context changed")
+				}
+				if len(body.Env)+len(body.EnvFrom)+len(body.Configuration.Sandbox.EnvFrom) != 0 || body.AllowMultipleRuns {
+					t.Error("transport secret or reusable session enabled")
+				}
+				if body.Configuration.Hooks.BeforeRun != sandbox.LocalBeforeRun("print('trusted')") || body.Configuration.Hooks.AfterRun != sandbox.LocalAfterRun() {
+					t.Error("local prepare/export replaced")
+				}
+				if !slices.Equal(body.Configuration.Sandbox.Services, []string{"local-memory", "kord_protected"}) {
+					t.Error("selected services changed")
+				}
+				out.WriteHeader(http.StatusAccepted)
+				_ = json.NewEncoder(out).Encode(map[string]string{"session_id": uuid.NewString(), "run_id": uuid.NewString(), "message_id": uuid.NewString()})
+			}))
+			defer server.Close()
+			c, err := New(config.Config{MaxRequestBytes: 1 << 20, Orpheus: config.Endpoint{BaseURL: server.URL}}, "synthetic")
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := config.Workflow{Access: &config.Access{LocalServices: true, LocalProviderContext: true, LocalFiles: true}, Services: []string{"local-memory", "kord_protected"}, LocalBeforeRunPython: "print('trusted')"}
+			w.Mattermost.TokenEnv = "PRIVATE_BOT_TOKEN"
+			env := conversation.Envelope{Anchor: "example", AccessContext: expected}
+			if scenario == "missing context" {
+				env.AccessContext = nil
+			}
+			_, err = c.Submit(t.Context(), w, env, []conversation.InputMessage{{Text: "synthetic"}}, "", "", "")
+			if scenario == "missing context" {
+				if err == nil || calls != 0 {
+					t.Fatal("missing context reached core")
+				}
+				return
+			}
+			if err != nil || calls != 1 {
+				t.Fatal("submit failed", err, calls)
+			}
+		})
 	}
 }
