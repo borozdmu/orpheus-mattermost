@@ -374,6 +374,8 @@ unaccepted in Mattermost; neither their text nor files enter `BuildMessages` or
 `SendMessage.access_context.input_subjects`. Renewal and publication do not fetch
 a new audience.
 
+Protected Mattermost threads show access notices from the workflow’s `reconcile_from` timestamp by default. When upgrading existing installations, set `MATTERMOST_ACCESS_NOTICES_FROM` once to the deployment timestamp (RFC 3339). `MATTERMOST_ACCESS_NOTICE_SERVICE` can name the account directory in the notice (for example `Kord`). Keep the value through restarts. Earlier requests do not generate notices. When a participant mapping is missing, the bot lists the current channel usernames and asks the requester to link the accounts and send a new mention. Notices contain no request text, provider output, email, or credentials. A denied input is recorded in the source thread and is not submitted automatically when the mapping changes. A blocked result remains subject to its original audience and the current policy. The local policy can return `identity_unconfirmed` or `participant_access_unconfirmed` with a list of Mattermost `participant_ids`, or a generic `channel_policy_denied` / `channel_policy_unavailable`. The connector verifies the live membership before displaying names.
+
 Only `409 service_scope_changed` rotates a reusable protected session. The new
 session keeps the invocation, but rebuilds only the frozen triggering posts.
 It does not transfer the old payload or file index. First admission and unknown

@@ -28,6 +28,7 @@ func projectAccess(binding config.Access, audience []string, actor string) (api.
 	allowed := make([]api.AccessSubject, 0, len(members))
 	readers := make([]json.RawMessage, 0, len(members)-1)
 	seen := make(map[string]bool, len(members))
+	var missing []string
 	for _, id := range members {
 		if !config.ValidID(id) || seen[id] {
 			return nil, nil, errors.New("invalid protected audience")
@@ -42,7 +43,8 @@ func projectAccess(binding config.Access, audience []string, actor string) (api.
 		}
 		mapped, ok := binding.IdentityProjection.Subjects[id]
 		if !ok {
-			return nil, nil, errors.New("audience member lacks service identity")
+			missing = append(missing, id)
+			continue
 		}
 		raw, err := mapped.MarshalJSON()
 		if err != nil {
@@ -52,6 +54,12 @@ func projectAccess(binding config.Access, audience []string, actor string) (api.
 	}
 	if !seen[actor] || !seen[binding.BotID] {
 		return nil, nil, errors.New("protected actor or bot outside audience")
+	}
+	if peer := binding.Peer; peer != nil && (actor == peer.ID || !seen[peer.ID]) {
+		return nil, nil, errors.New("protected peer or actor mismatch")
+	}
+	if len(missing) > 0 {
+		return nil, nil, &audienceDenial{code: "identity_unmapped", ids: missing}
 	}
 	raw, err := json.Marshal(binding.ScopeContext)
 	if err != nil {
@@ -132,6 +140,11 @@ func protectedContract(s *conversation.Session, r *conversation.Run, w config.Wo
 
 // confirmAudience observes the channel, its membership and the active recipient types.
 func (e *Engine) confirmAudience(ctx context.Context, w config.Workflow, key conversation.Key) ([]string, time.Time, error) {
+	return e.readAudience(ctx, w, key, nil)
+}
+
+// readAudience optionally retains public usernames from the same verified membership scan.
+func (e *Engine) readAudience(ctx context.Context, w config.Workflow, key conversation.Key, usernames map[string]string) ([]string, time.Time, error) {
 	observed := time.Now().UTC()
 	ch, err := e.MM.Channel(ctx, key.Channel)
 	if err != nil {
@@ -159,6 +172,9 @@ func (e *Engine) confirmAudience(ctx context.Context, w config.Workflow, key con
 		expectBot := w.Access.Peer != nil && id == w.Access.Peer.ID
 		if user.ID != id || user.DeleteAt != 0 || user.IsBot != expectBot {
 			return nil, time.Time{}, errors.New("unconfirmed audience identity")
+		}
+		if _, wanted := usernames[id]; wanted && !user.IsBot {
+			usernames[id] = user.Username
 		}
 	}
 	if time.Since(observed) >= time.Minute {

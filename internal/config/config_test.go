@@ -335,3 +335,23 @@ func TestMattermostSettingsBelongToWorkflow(t *testing.T) {
 		t.Fatal("identity depends on token reference or ignores bot")
 	}
 }
+
+func TestAccessNoticeRolloutSettings(t *testing.T) {
+	t.Setenv("WORKFLOWS_DIR", "../../workflows")
+	t.Setenv("ORPHEUS_BASE_URL", "http://orpheus:8000")
+	t.Setenv("MATTERMOST_ACCESS_NOTICES_FROM", "2026-11-08T00:00:00Z")
+	t.Setenv("MATTERMOST_ACCESS_NOTICE_SERVICE", "Kord")
+	c, err := Load()
+	if err != nil || c.AccessNoticesFrom.IsZero() || c.AccessNoticeService != "Kord" {
+		t.Fatal("invalid rollout settings", err)
+	}
+	t.Setenv("MATTERMOST_ACCESS_NOTICES_FROM", "invalid")
+	if _, err = Load(); err == nil {
+		t.Fatal("invalid notice cutoff accepted")
+	}
+	t.Setenv("MATTERMOST_ACCESS_NOTICES_FROM", "")
+	t.Setenv("MATTERMOST_ACCESS_NOTICE_SERVICE", "@channel")
+	if _, err = Load(); err == nil {
+		t.Fatal("unsafe display label accepted")
+	}
+}

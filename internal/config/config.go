@@ -93,6 +93,8 @@ type Workflow struct {
 type Config struct {
 	Transcription                  Transcription
 	KeepUnroutedPrivateMemberships bool
+	AccessNoticesFrom              time.Time
+	AccessNoticeService            string
 
 	AgentBoxAPIURL     string
 	Orpheus            Endpoint
@@ -153,6 +155,16 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, errors.New("MATTERMOST_LEAVE_UNROUTED_PRIVATE_CHANNELS must be a boolean")
 	}
 	cfg.KeepUnroutedPrivateMemberships = !leaveUnrouted
+	cfg.AccessNoticeService = value("MATTERMOST_ACCESS_NOTICE_SERVICE", "")
+	if cfg.AccessNoticeService != "" && !accessNamePattern.MatchString(cfg.AccessNoticeService) {
+		return Config{}, errors.New("MATTERMOST_ACCESS_NOTICE_SERVICE must be a short plain service name")
+	}
+	if from := value("MATTERMOST_ACCESS_NOTICES_FROM", ""); from != "" {
+		cfg.AccessNoticesFrom, err = time.Parse(time.RFC3339Nano, from)
+		if err != nil || cfg.AccessNoticesFrom.IsZero() {
+			return Config{}, errors.New("MATTERMOST_ACCESS_NOTICES_FROM must be an RFC3339 timestamp")
+		}
+	}
 	cfg.Transcription, err = loadTranscription(func(key string) string { return value(key, "") })
 	if err != nil {
 		return Config{}, err
