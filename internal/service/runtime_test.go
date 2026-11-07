@@ -107,6 +107,18 @@ func TestUnroutedPrivateChannelsAreLeft(t *testing.T) {
 	}
 }
 
+func TestKeepUnroutedPrivateMembershipDoesNotRouteChannel(t *testing.T) {
+	engine, _, _, _, _ := fixture(t)
+	engine.Config.KeepUnroutedPrivateMemberships = true
+	source := &membershipSource{}
+	runtime := &Runtime{Engine: &Engine{MM: source}, Logger: slog.New(slog.DiscardHandler)}
+	channels := []mattermost.Channel{{ID: "pppppppppppppppppppppppppp", Type: "P"}}
+	kept, err := runtime.leaveUnroutedPrivateChannels(t.Context(), engine.Config, channels, 0)
+	if err != nil || len(kept) != 0 || len(source.removed) != 0 {
+		t.Fatalf("routed=%v removed=%v err=%v", kept, source.removed, err)
+	}
+}
+
 func TestPrivateChannelRemovalMustSucceed(t *testing.T) {
 	engine, _, _, _, _ := fixture(t)
 	const (

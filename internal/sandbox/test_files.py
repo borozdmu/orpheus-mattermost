@@ -349,5 +349,41 @@ store.seal(json.loads(sys.argv[3]))
         self.assertNotIn(b'test-secret', rejected.stderr)
 
 
+class AgentMemoryContext(unittest.TestCase):
+    def test_common_client_and_private_run_context(self):
+        import base64
+        import hashlib
+        import tempfile
+        import os
+        import runpy
+        import uuid
+        from pathlib import Path
+        from unittest.mock import patch
+        module = runpy.run_path(str(Path(__file__).with_name('files.py')))
+        code = b'print("memory client fixture")\n'
+        key = 'fixture-not-a-real-secret-' + 'x' * 20
+        env = dict(AGENT_MEMORY_URL='https://memory.invalid/v1', AGENT_MEMORY_KEY=key,
+                   AGENT_MEMORY_CLIENT_B64=base64.b64encode(code).decode(),
+                   AGENT_MEMORY_CLIENT_SHA256=hashlib.sha256(code).hexdigest(),
+                   ORPHEUS_SESSION_ID=str(uuid.uuid4()), ORPHEUS_RUN_ID=str(uuid.uuid4()))
+        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, env):
+            store = module['Store'](root)
+            try:
+                module['prepare_agent_memory'](store)
+                path = Path(root) / '.agent-memory/current-run.json'
+                self.assertNotIn(key, path.read_text())
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                context = json.loads(path.read_text())
+                self.assertEqual(context['session_id'], env['ORPHEUS_SESSION_ID'])
+                self.assertEqual(context['run_id'], env['ORPHEUS_RUN_ID'])
+                self.assertEqual((path.parent / 'memory.py').read_bytes(), code)
+                with patch.dict(os.environ, {'AGENT_MEMORY_CLIENT_SHA256': '0' * 64}):
+                    with self.assertRaises(Exception):
+                        module['prepare_agent_memory'](store)
+                self.assertEqual((path.parent / 'memory.py').read_bytes(), code)
+            finally:
+                store.close()
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -28,7 +28,11 @@ if docker run --rm --env-file "$smoke_tmp/app.env" -e WORKFLOWS_DIR=/missing orp
   echo 'Missing workflows unexpectedly accepted' >&2
   exit 1
 fi
-docker network create "$smoke_prefix" >/dev/null
+if [ -n "${SMOKE_SUBNET:-}" ]; then
+  docker network create --subnet "$SMOKE_SUBNET" "$smoke_prefix" >/dev/null
+else
+  docker network create "$smoke_prefix" >/dev/null
+fi
 docker run -d --name "$smoke_prefix-deps" --network "$smoke_prefix" --network-alias deps --entrypoint /smoke-server -v "$PWD/bin/smoke-server:/smoke-server:ro" orpheus-mattermost:local >/dev/null
 docker run -d --name "$smoke_prefix-app" --network "$smoke_prefix" --env-file "$smoke_tmp/app.env" -v "$smoke_tmp/workflows:/app/workflows:ro" orpheus-mattermost:local >/dev/null
 smoke_attempt=0

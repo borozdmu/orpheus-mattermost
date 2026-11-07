@@ -39,6 +39,9 @@ func TestExampleAndRouting(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	if c.KeepUnroutedPrivateMemberships {
+		t.Fatal("default must leave unrouted private channels")
+	}
 	if !strings.Contains(c.Workflows[0].Instructions, "view_image") || c.HTTPTimeout.Value().Seconds() != 30 || c.Workflows[0].MessageBatchWindow.Value() != 0 {
 		t.Fatal("workflow body or defaults missing")
 	}
@@ -99,6 +102,7 @@ func TestInvalidEnvironment(t *testing.T) {
 		{"HTTP_TIMEOUT": "private-token"}, {"HTTP_TIMEOUT": "0s"},
 		{"MAX_REQUEST_BYTES": "private-token"}, {"MAX_REQUEST_BYTES": "0"},
 		{"MAX_PARALLEL_THREADS": "129"}, {"WORKFLOWS_DIR": ""},
+		{"MATTERMOST_LEAVE_UNROUTED_PRIVATE_CHANNELS": "unknown"},
 		{"WORKFLOWS_DIR": "/missing"}, {"LISTEN_ADDR": ""},
 	} {
 		c, err := example(t, change)
@@ -112,6 +116,12 @@ func TestInvalidEnvironment(t *testing.T) {
 	c, err := example(t, map[string]string{"MAX_PARALLEL_THREADS": "3", "HTTP_TIMEOUT": "45s"})
 	if err != nil || c.MaxParallelThreads != 3 || c.HTTPTimeout.Value().Seconds() != 45 {
 		t.Fatal(c, err)
+	}
+}
+func TestKeepPrivateMemberships(t *testing.T) {
+	c, err := example(t, map[string]string{"MATTERMOST_LEAVE_UNROUTED_PRIVATE_CHANNELS": "false"})
+	if err != nil || !c.KeepUnroutedPrivateMemberships {
+		t.Fatal("could not preserve private memberships", err)
 	}
 }
 func TestInvalidFrontMatter(t *testing.T) {

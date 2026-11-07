@@ -1,4 +1,5 @@
 """Mattermost file hooks. Python 3 standard library only; no template installation."""
+import base64
 import contextlib
 import errno
 import fcntl
@@ -532,6 +533,19 @@ class Mattermost:
         return result['file_infos'][0]
 
 
+
+def prepare_agent_memory(store):
+    names = ('AGENT_MEMORY_URL', 'AGENT_MEMORY_KEY', 'AGENT_MEMORY_CLIENT_B64', 'AGENT_MEMORY_CLIENT_SHA256')
+    if not any(os.environ.get(name) for name in names):
+        return
+    require(all(os.environ.get(name) for name in names), 'common memory service incomplete')
+    code = base64.b64decode(os.environ['AGENT_MEMORY_CLIENT_B64'], validate=True)
+    require(len(code) <= 20000 and hashlib.sha256(code).hexdigest() == os.environ['AGENT_MEMORY_CLIENT_SHA256'],
+            'common memory client checksum mismatch')
+    store.write('.agent-memory/memory.py', code)
+    store.json('.agent-memory/current-run.json', {
+        'session_id': os.environ['ORPHEUS_SESSION_ID'], 'run_id': os.environ['ORPHEUS_RUN_ID']})
+
 def main(command):
     with step('workspace_access'):
         store = Store(os.environ['ORPHEUS_WORKSPACE_PATH'])
@@ -564,6 +578,8 @@ def main(command):
             require(request['source_id'] == os.environ['MM_SOURCE_ID'] and
                     request['channel_id'] == os.environ['MM_CHANNEL_ID'], 'input request identity mismatch')
         if command == 'prepare-input':
+            with step('agent_memory_context'):
+                prepare_agent_memory(store)
             with step('input_preparation'):
                 store.prepare(source, request)
             with step('run_initialization'):

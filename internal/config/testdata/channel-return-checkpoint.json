@@ -1,0 +1,12 @@
+{
+  "schema": "mattermost-admission-checkpoint.v1",
+  "channel_id": "cccccccccccccccccccccccccc",
+  "bot_id": "1spguz8g9pyhmdrjz7mc9rspbo",
+  "epoch": "22222222-2222-4222-8222-222222222222",
+  "floor_ms": 100,
+  "replay_from_ms": 200,
+  "consumed_post_ids": [
+    "pppppppppppppppppppppppppp",
+    "rrrrrrrrrrrrrrrrrrrrrrrrrr"
+  ]
+}

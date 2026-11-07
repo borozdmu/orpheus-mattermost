@@ -212,7 +212,7 @@ func TestLiveOrpheusImagesAndOutput(t *testing.T) {
 		if err := publisher.Refresh(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if err := engine.publish(ctx, publisher, s, r); err != nil {
+		if err := engine.publish(ctx, publisher, s, r, w); err != nil {
 			t.Fatal(err)
 		}
 		firstPosts := make(map[string]bool, len(publisher.Posts))
@@ -226,7 +226,7 @@ func TestLiveOrpheusImagesAndOutput(t *testing.T) {
 		if err := publisher.Refresh(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if err := engine.publish(ctx, publisher, s, r); err != nil {
+		if err := engine.publish(ctx, publisher, s, r, w); err != nil {
 			t.Fatal(err)
 		}
 		var added, missing []string

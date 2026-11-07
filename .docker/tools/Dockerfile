@@ -6,7 +6,7 @@ COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 && \
     go install golang.org/x/vuln/cmd/govulncheck@v1.8.0 && \
-    go install golang.org/x/tools/cmd/goimports@v0.48.0
+    go install golang.org/x/tools/cmd/goimports@v0.50.0
 # hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
