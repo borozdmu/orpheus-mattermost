@@ -91,7 +91,9 @@ type Workflow struct {
 	EffectiveRevision     string    `yaml:"-"`
 }
 type Config struct {
-	Transcription Transcription
+	AccessNoticesFrom   time.Time
+	AccessNoticeService string
+	Transcription       Transcription
 
 	AgentBoxAPIURL     string
 	Orpheus            Endpoint
@@ -147,6 +149,16 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, errors.New("HTTP_TIMEOUT must be a duration")
 	}
 	var err error
+	cfg.AccessNoticeService = value("MATTERMOST_ACCESS_NOTICE_SERVICE", "")
+	if cfg.AccessNoticeService != "" && !accessNamePattern.MatchString(cfg.AccessNoticeService) {
+		return Config{}, errors.New("MATTERMOST_ACCESS_NOTICE_SERVICE must be a short plain service name")
+	}
+	if from := value("MATTERMOST_ACCESS_NOTICES_FROM", ""); from != "" {
+		cfg.AccessNoticesFrom, err = time.Parse(time.RFC3339Nano, from)
+		if err != nil || cfg.AccessNoticesFrom.IsZero() {
+			return Config{}, errors.New("MATTERMOST_ACCESS_NOTICES_FROM must be an RFC3339 timestamp")
+		}
+	}
 	cfg.Transcription, err = loadTranscription(func(key string) string { return value(key, "") })
 	if err != nil {
 		return Config{}, err
