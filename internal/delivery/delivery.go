@@ -131,6 +131,17 @@ func (p *Publisher) NoticeExists(kind, run string) bool {
 	}
 	return false
 }
+
+// CompleteNotice reports completion only after its final fragment has been recorded.
+func (p *Publisher) CompleteNotice(kind, run string) bool {
+	for _, post := range p.Posts {
+		r, ok := p.receipt(post)
+		if ok && r.MessageID == kind && r.RunID == run && r.Parts > 0 && r.Part == r.Parts-1 && r.Hash == attachments.Hash([]byte(post.Message)) {
+			return true
+		}
+	}
+	return false
+}
 func (p *Publisher) Rejected(revision string) map[string]bool {
 	ids := map[string]bool{}
 	current := map[string]mattermost.Post{}
@@ -139,7 +150,10 @@ func (p *Publisher) Rejected(revision string) map[string]bool {
 	}
 	for _, post := range p.Posts {
 		r, ok := p.receipt(post)
-		if !ok || r.MessageID != "input_rejected" || r.Hash != attachments.Hash([]byte(post.Message)) || r.InputHash == "" || r.Revision != revision {
+		if !ok || r.Hash != attachments.Hash([]byte(post.Message)) {
+			continue
+		}
+		if r.MessageID != "input_unmapped" && (r.MessageID != "input_rejected" || r.InputHash == "" || r.Revision != revision) {
 			continue
 		}
 		for _, v := range r.InputVersions {
