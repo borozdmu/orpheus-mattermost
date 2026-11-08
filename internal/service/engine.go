@@ -36,6 +36,7 @@ type MM interface {
 	conversation.ContextSource
 	delivery.Source
 	Channels(context.Context) ([]mattermost.Channel, error)
+	RemoveChannelMember(context.Context, string, string) error
 	Posts(context.Context, string, time.Time) ([]mattermost.Post, error)
 	Me(context.Context) (mattermost.User, error)
 	Audience(context.Context, string) ([]string, error)
@@ -188,10 +189,27 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 	if err != nil {
 		return err
 	}
-	if w.Access != nil && (w.Access.Peer != nil || w.Access.LocalPolicy()) {
+	if w.Access != nil {
+		defer func() {
+			if errors.Is(result, errWithholdOutput) {
+				result = nil
+				return
+			}
+			if _, ok := errors.AsType[*audienceDenial](result); ok && env.AccessContext != nil {
+				if p.CompleteNotice("output_access_notice", r.ID) {
+					result = nil
+					return
+				}
+				actor := env.AccessContext.Subject.ID
+				result = e.accessNotice(ctx, w, p, env, actor, []string{actor}, result, r.ID)
+			}
+		}()
 		p.BeforeCreate = func(ctx context.Context) error {
 			if err := validateProtectedContext(env, w); err != nil {
-				return err
+				if w.Access.Peer != nil || w.Access.LocalPolicy() {
+					return err
+				}
+				return errWithholdOutput
 			}
 			audience, _, err := e.confirmAudience(ctx, w, p.Key)
 			if err != nil {
@@ -199,6 +217,11 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 			}
 			if _, _, err = projectAccess(*w.Access, audience, env.AccessContext.Subject.ID); err != nil {
 				return err
+			}
+			for _, id := range audience {
+				if !slices.Contains(env.AccessProof.AudienceSubjects, id) {
+					return errWithholdOutput
+				}
 			}
 			return localGate(ctx, w, env, audience, []string{env.AccessContext.Subject.ID})
 		}
@@ -585,11 +608,15 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 			})
 		}
 		if t, body, pred, ok := transfer(transferSnapshot); ok {
-			env = t
-			env.Revision = w.EffectiveRevision
-			messages = body
+			if initial {
+				env, messages, buildErr = builder.RebuildTransfer(ctx, key, channel, posts, transferSnapshot, t, body, time.Now())
+			} else {
+				env = t
+				env.Revision = w.EffectiveRevision
+				messages = body
+				buildErr = nil
+			}
 			predecessor = pred
-			buildErr = nil
 		}
 	}
 	e.queued(key, len(env.TriggerIDs))
@@ -701,7 +728,30 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 		} else {
 			access, proof, err := e.admission(ctx, w, key, env, posts)
 			if err != nil {
-				return err
+				// An older, unaccepted mention can own the first batch in this thread.
+				// Select the first new eligible mention for its own notice, without dispatching either batch.
+				if _, denied := errors.AsType[*audienceDenial](err); denied && !e.noticeDue(w, p, env) {
+					builder.Workflow.Since = e.noticeStart(w)
+					builder.TriggerOnly = true
+					fresh, _, buildErr := builder.BuildMessages(ctx, key, channel, posts, snapshot, true, time.Now())
+					if buildErr != nil || fresh.Anchor == "" {
+						return buildErr
+					}
+					_, _, freshErr := e.admission(ctx, w, key, fresh, posts)
+					if freshErr == nil {
+						return nil
+					}
+					freshInput := pending{Envelope: fresh}
+					for _, post := range posts {
+						if slices.Contains(fresh.TriggerIDs, post.ID) {
+							freshInput.TriggerPosts = append(freshInput.TriggerPosts, post)
+						}
+					}
+					actor, authors := triggerAuthors(freshInput)
+					return e.accessNotice(ctx, w, p, fresh, actor, authors, freshErr, "")
+				}
+				actor, authors := triggerAuthors(frozen)
+				return e.accessNotice(ctx, w, p, env, actor, authors, err, "")
 			}
 			frozen.Envelope.AccessContext = access
 			frozen.Envelope.AccessProof = proof
@@ -723,16 +773,22 @@ func (e *Engine) submit(ctx context.Context, key conversation.Key, p pending, cu
 		if err != nil {
 			return err
 		}
-		if _, _, err := projectAccess(*a, audience, p.Envelope.AccessContext.Subject.ID); err != nil {
-			return err
+		actor, authors := triggerAuthors(p)
+		_, _, err = projectAccess(*a, audience, actor)
+		if err == nil {
+			err = localGate(ctx, p.Workflow, p.Envelope, audience, authors)
 		}
-		authors := []string{p.Envelope.AccessContext.Subject.ID}
-		for _, post := range p.TriggerPosts {
-			if !slices.Contains(authors, post.UserID) {
-				authors = append(authors, post.UserID)
+		if err != nil {
+			if _, ok := errors.AsType[*audienceDenial](err); !ok {
+				return err
 			}
-		}
-		if err := localGate(ctx, p.Workflow, p.Envelope, audience, authors); err != nil {
+			publisher := &delivery.Publisher{MM: e.MM, Key: key, BotID: e.Bot.ID}
+			if readErr := publisher.Refresh(ctx); readErr != nil {
+				return readErr
+			}
+			if err = e.accessNotice(ctx, p.Workflow, publisher, p.Envelope, actor, authors, err, ""); err == nil {
+				e.clear(key)
+			}
 			return err
 		}
 		if err := projectLocalInput(ctx, &p, e.MM); err != nil {
@@ -797,7 +853,13 @@ func (e *Engine) submit(ctx context.Context, key conversation.Key, p pending, cu
 		if readErr := publisher.Refresh(ctx); readErr != nil {
 			return readErr
 		}
-		if err = e.reject(ctx, publisher, p.Envelope, p.Messages, "Orpheus rejected the request: "+code+". Check the request or configuration."); err == nil {
+		if p.Workflow.Access != nil && (code == "service_access_denied" || code == "input_subject_denied") {
+			actor, authors := triggerAuthors(p)
+			err = e.accessNotice(ctx, p.Workflow, publisher, p.Envelope, actor, authors, &audienceDenial{code: code}, "")
+		} else {
+			err = e.reject(ctx, publisher, p.Envelope, p.Messages, "Orpheus rejected the request: "+code+". Check the request or configuration.")
+		}
+		if err == nil {
 			e.clear(key)
 		}
 		return err

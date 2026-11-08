@@ -39,6 +39,9 @@ func TestExampleAndRouting(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	if c.KeepUnroutedPrivateMemberships {
+		t.Fatal("default must leave unrouted private channels")
+	}
 	if !strings.Contains(c.Workflows[0].Instructions, "view_image") || c.HTTPTimeout.Value().Seconds() != 30 || c.Workflows[0].MessageBatchWindow.Value() != 0 {
 		t.Fatal("workflow body or defaults missing")
 	}
@@ -57,6 +60,10 @@ func TestExampleAndRouting(t *testing.T) {
 	w, e = c.Route(special.IncludeIDs[0], "O")
 	if e != nil || w.ID != "special" {
 		t.Fatal(w, e)
+	}
+	w, e = c.Route(special.IncludeIDs[0], "P")
+	if e != nil || w != nil {
+		t.Fatal("include_ids enabled a private channel without private_channels")
 	}
 }
 func TestMessageBatchWindow(t *testing.T) {
@@ -95,6 +102,7 @@ func TestInvalidEnvironment(t *testing.T) {
 		{"HTTP_TIMEOUT": "private-token"}, {"HTTP_TIMEOUT": "0s"},
 		{"MAX_REQUEST_BYTES": "private-token"}, {"MAX_REQUEST_BYTES": "0"},
 		{"MAX_PARALLEL_THREADS": "129"}, {"WORKFLOWS_DIR": ""},
+		{"MATTERMOST_LEAVE_UNROUTED_PRIVATE_CHANNELS": "unknown"},
 		{"WORKFLOWS_DIR": "/missing"}, {"LISTEN_ADDR": ""},
 	} {
 		c, err := example(t, change)
@@ -108,6 +116,12 @@ func TestInvalidEnvironment(t *testing.T) {
 	c, err := example(t, map[string]string{"MAX_PARALLEL_THREADS": "3", "HTTP_TIMEOUT": "45s"})
 	if err != nil || c.MaxParallelThreads != 3 || c.HTTPTimeout.Value().Seconds() != 45 {
 		t.Fatal(c, err)
+	}
+}
+func TestKeepPrivateMemberships(t *testing.T) {
+	c, err := example(t, map[string]string{"MATTERMOST_LEAVE_UNROUTED_PRIVATE_CHANNELS": "false"})
+	if err != nil || !c.KeepUnroutedPrivateMemberships {
+		t.Fatal("could not preserve private memberships", err)
 	}
 }
 func TestInvalidFrontMatter(t *testing.T) {
@@ -319,5 +333,25 @@ func TestMattermostSettingsBelongToWorkflow(t *testing.T) {
 	endpoint.TokenEnv = "ROTATED_TOKEN"
 	if before != endpoint.Source("aaaaaaaaaaaaaaaaaaaaaaaaaa") || before == endpoint.Source("bbbbbbbbbbbbbbbbbbbbbbbbbb") {
 		t.Fatal("identity depends on token reference or ignores bot")
+	}
+}
+
+func TestAccessNoticeRolloutSettings(t *testing.T) {
+	t.Setenv("WORKFLOWS_DIR", "../../workflows")
+	t.Setenv("ORPHEUS_BASE_URL", "http://orpheus:8000")
+	t.Setenv("MATTERMOST_ACCESS_NOTICES_FROM", "2026-11-08T00:00:00Z")
+	t.Setenv("MATTERMOST_ACCESS_NOTICE_SERVICE", "Kord")
+	c, err := Load()
+	if err != nil || c.AccessNoticesFrom.IsZero() || c.AccessNoticeService != "Kord" {
+		t.Fatal("invalid rollout settings", err)
+	}
+	t.Setenv("MATTERMOST_ACCESS_NOTICES_FROM", "invalid")
+	if _, err = Load(); err == nil {
+		t.Fatal("invalid notice cutoff accepted")
+	}
+	t.Setenv("MATTERMOST_ACCESS_NOTICES_FROM", "")
+	t.Setenv("MATTERMOST_ACCESS_NOTICE_SERVICE", "@channel")
+	if _, err = Load(); err == nil {
+		t.Fatal("unsafe display label accepted")
 	}
 }

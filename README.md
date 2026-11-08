@@ -78,6 +78,8 @@ Binary commands: `serve`, `validate`, `healthcheck`, and `export-checkpoint`. Th
 script handles `prepare-input`, `export-output`, and SDK `import-input`.
 File hooks upload files but never create Mattermost posts.
 
+For recovery after sandbox deletion, see [session continuation](docs/CONTINUATION.md).
+
 ## Transferring a channel
 
 A disabled workflow can import an [admission checkpoint](docs/ADMISSION_CHECKPOINT.md)

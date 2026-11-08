@@ -156,7 +156,7 @@ func (r *Runtime) Handler() http.Handler {
 	return mux
 }
 func reloadCompatible(a, b config.Config) bool {
-	return a.Transcription == b.Transcription && a.Orpheus == b.Orpheus && a.AgentBoxAPIURL == b.AgentBoxAPIURL && a.Listen == b.Listen && a.HTTPTimeout == b.HTTPTimeout && a.MaxRequestBytes == b.MaxRequestBytes
+	return a.KeepUnroutedPrivateMemberships == b.KeepUnroutedPrivateMemberships && a.Transcription == b.Transcription && a.Orpheus == b.Orpheus && a.AgentBoxAPIURL == b.AgentBoxAPIURL && a.Listen == b.Listen && a.HTTPTimeout == b.HTTPTimeout && a.MaxRequestBytes == b.MaxRequestBytes
 }
 func errorClass(err error) string {
 	switch {
@@ -513,6 +513,10 @@ func (r *Runtime) scan(ctx context.Context, cfg config.Config, retired []config.
 		r.Logger.Error("channel discovery failed", "class", errorClass(err))
 		return
 	}
+	channels, err = r.leaveUnroutedPrivateChannels(ctx, cfg, channels, epoch)
+	if err != nil {
+		return
+	}
 	channelMap := map[string]mattermost.Channel{}
 	for _, ch := range channels {
 		if ch.DeleteAt == 0 {
@@ -648,4 +652,46 @@ func (r *Runtime) scan(ctx context.Context, cfg config.Config, retired []config.
 	r.replayLag.Store(int64(lag))
 	r.mu.Unlock()
 	success = true
+}
+
+func (r *Runtime) leaveUnroutedPrivateChannels(ctx context.Context, cfg config.Config, channels []mattermost.Channel, epoch uint64) ([]mattermost.Channel, error) {
+	kept := make([]mattermost.Channel, 0, len(channels))
+	var failures []error
+	for i, ch := range channels {
+		if ch.DeleteAt != 0 || ch.Type != "P" {
+			kept = append(kept, ch)
+			continue
+		}
+		workflow, err := cfg.Route(ch.ID, ch.Type)
+		if err != nil {
+			r.Logger.Error("private channel routing failed", "channel", ch.ID)
+			failures = append(failures, err)
+			kept = append(kept, ch)
+			continue
+		}
+		if workflow != nil {
+			kept = append(kept, ch)
+			continue
+		}
+		if cfg.KeepUnroutedPrivateMemberships {
+			// Keep the membership but omit the channel from reconciliation.
+			continue
+		}
+		// Serialize this irreversible membership change with configuration reloads.
+		r.mu.Lock()
+		if epoch != r.epoch {
+			r.mu.Unlock()
+			return append(kept, channels[i:]...), errors.Join(failures...)
+		}
+		err = r.Engine.MM.RemoveChannelMember(ctx, ch.ID, r.Engine.Bot.ID)
+		r.mu.Unlock()
+		if err != nil && mattermost.Status(err) != http.StatusNotFound {
+			r.Logger.Error("private channel removal failed", "channel", ch.ID, "class", errorClass(err))
+			failures = append(failures, err)
+			kept = append(kept, ch)
+			continue
+		}
+		r.Logger.Info("left private channel without workflow", "channel", ch.ID)
+	}
+	return kept, errors.Join(failures...)
 }
