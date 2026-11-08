@@ -158,3 +158,38 @@ func TestCorporateDiscoveryWithoutAliasesKeepsAllChannels(t *testing.T) {
 		t.Fatal("shared new namespace lost another channel during recovery")
 	}
 }
+
+func TestDeniedLegacyPartitionStillHoldsAgentCapacity(t *testing.T) {
+	_, _, _, _, first, w := protectedFixture(t)
+	w.MaxConcurrentRuns = 1
+	root := corporateStateBinding(w, first.Channel)
+	second := first
+	second.Channel = strings.Repeat("q", 26)
+	second.Workflow = "second-old-state"
+	root.IncludeIDs = append(root.IncludeIDs, second.Channel)
+	root.ChatAccess[second.Channel] = config.ChatAccess{StateRef: second.Workflow, Access: w.Access}
+	entry := root.ChatAccess[first.Channel]
+	entry.Deny = true
+	root.ChatAccess[first.Channel] = entry
+	cfg := config.Config{Workflows: []config.Workflow{root}}
+	current := cfg.StateWorkflow(second.Workflow, second.Channel)
+	if current == nil || cfg.StateWorkflow(first.Workflow, first.Channel) != nil {
+		t.Fatal("current route or denied state boundary invalid")
+	}
+	for _, unknown := range []bool{false, true} {
+		r := &Runtime{cfg: cfg, initialized: true, active: map[conversation.Key]int{}, unknown: map[conversation.Key]bool{}, jobs: map[conversation.Key]*scheduled{second: {}}}
+		if unknown {
+			r.unknown[first] = true
+		} else {
+			r.active[first] = 1
+		}
+		if r.reserve(second, *current) {
+			t.Errorf("new run admitted before denied old partition settled (unknown=%v)", unknown)
+		}
+		delete(r.active, first)
+		delete(r.unknown, first)
+		if !r.reserve(second, *current) {
+			t.Fatal("settled old partition retained capacity")
+		}
+	}
+}

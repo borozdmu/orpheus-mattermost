@@ -44,3 +44,5 @@ may retain its own ID for exactly one channel. Reload cannot change this mapping
 state handover requires drained work, checked journals and a restart. Agent run
 capacity remains shared across its state partitions. Memory mode values retain
 explicit false/empty settings; they do not create a new memory service.
+Closing a route does not release its running or uncertain admission from the
+agent's capacity limit. Its terminal state must be confirmed first.
