@@ -51,10 +51,13 @@ type Links struct {
 }
 
 type Workflow struct {
-	PublicTeamAudience bool                  `yaml:"public_team_audience" json:"public_team_audience,omitzero"`
-	Modes              map[string]ChatMode   `yaml:"modes" json:"modes,omitzero"`
-	AgentID            string                `yaml:"agent_id" json:"agent_id,omitzero"`
-	ChatAccess         map[string]ChatAccess `yaml:"chat_access" json:"chat_access,omitzero"`
+	Memory               bool                  `yaml:"memory" json:"memory,omitzero"`
+	MemorySharedServices []string              `yaml:"memory_shared_services" json:"memory_shared_services,omitzero"`
+	MemorySharedRevision string                `yaml:"memory_shared_revision" json:"memory_shared_revision,omitzero"`
+	PublicTeamAudience   bool                  `yaml:"public_team_audience" json:"public_team_audience,omitzero"`
+	Modes                map[string]ChatMode   `yaml:"modes" json:"modes,omitzero"`
+	AgentID              string                `yaml:"agent_id" json:"agent_id,omitzero"`
+	ChatAccess           map[string]ChatAccess `yaml:"chat_access" json:"chat_access,omitzero"`
 	// LocalBeforeRunPython is trusted administrator code, never message content.
 	LocalBeforeRunPython string `yaml:"local_before_run_python" json:"local_before_run_python,omitzero"`
 
@@ -233,6 +236,9 @@ func validURL(raw string) bool {
 	return e == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == ""
 }
 func (c *Config) validate() error {
+	if err := ValidateStateRefs(c.Workflows); err != nil {
+		return err
+	}
 	_, port, err := net.SplitHostPort(c.Listen)
 	if err != nil {
 		return errors.New("LISTEN_ADDR must be a host:port address")
@@ -531,9 +537,10 @@ func (e Endpoint) Source(botID string) string {
 }
 
 type ChatAccess struct {
-	Mode   string  `yaml:"mode" json:"mode,omitzero"`
-	Access *Access `yaml:"access_context" json:"access_context"`
-	Deny   bool    `yaml:"deny" json:"deny,omitzero"`
+	StateRef string  `yaml:"state_ref" json:"state_ref,omitzero"`
+	Mode     string  `yaml:"mode" json:"mode,omitzero"`
+	Access   *Access `yaml:"access_context" json:"access_context"`
+	Deny     bool    `yaml:"deny" json:"deny,omitzero"`
 }
 
 func (w Workflow) ForChat(chat string) (Workflow, error) {
@@ -564,6 +571,15 @@ func (w Workflow) ForChat(chat string) (Workflow, error) {
 				}
 			}
 		}
+		if mode.Memory != nil {
+			w.Memory = *mode.Memory
+		}
+		if mode.MemorySharedServices != nil {
+			w.MemorySharedServices = slices.Clone(mode.MemorySharedServices)
+		}
+		if mode.MemorySharedRevision != nil {
+			w.MemorySharedRevision = *mode.MemorySharedRevision
+		}
 		if mode.PrivateChannels != nil {
 			w.PrivateChannels = *mode.PrivateChannels
 		}
@@ -582,6 +598,9 @@ func (w Workflow) ForChat(chat string) (Workflow, error) {
 		if mode.StartOnMention != nil {
 			w.StartOnMention = mode.StartOnMention
 		}
+	}
+	if entry.StateRef != "" {
+		w.ID = entry.StateRef
 	}
 	w.Modes = nil
 	w.ChatAccess = nil

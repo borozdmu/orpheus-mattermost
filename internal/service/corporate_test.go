@@ -40,7 +40,13 @@ func TestCorporateAdmissionReconfirmationAndAuthorIsolation(t *testing.T) {
 	w.Access.ScopeContext = map[string]any{"agent_id": "mark", "policy_space_id": "mark-test"}
 	w.Access.IdentityProjection.ActorField = "actor_user_id"
 	w.Access.IdentityProjection.AudienceField = "reader_user_ids"
-	e.Config.Workflows[0] = w
+	root := corporateStateBinding(w, key.Channel)
+	e.Config.Workflows[0] = root
+	var resolveErr error
+	w, resolveErr = root.ForChat(key.Channel)
+	if resolveErr != nil {
+		t.Fatal(resolveErr)
+	}
 	if err := e.Thread(t.Context(), w, key, mm.channel, true); err != nil {
 		t.Fatal(err)
 	}
