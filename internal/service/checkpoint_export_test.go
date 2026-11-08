@@ -19,12 +19,14 @@ import (
 const returnEpoch = "22222222-2222-4222-8222-222222222222"
 
 type exportAPI struct {
-	sessions []conversation.Session
-	snapshot conversation.Snapshot
-	err      error
+	namespaces []string
+	sessions   []conversation.Session
+	snapshot   conversation.Snapshot
+	err        error
 }
 
-func (a *exportAPI) Sessions(context.Context, string, string) ([]conversation.Session, error) {
+func (a *exportAPI) Sessions(_ context.Context, namespace, _ string) ([]conversation.Session, error) {
+	a.namespaces = append(a.namespaces, namespace)
 	return a.sessions, a.err
 }
 func (a *exportAPI) Snapshot(context.Context, conversation.Key) (conversation.Snapshot, error) {
@@ -186,5 +188,20 @@ func TestExportIncludesPreAdmissionRejectionAndRequiresEveryPart(t *testing.T) {
 	m.posts = m.posts[:len(m.posts)-1]
 	if _, err = ExportCheckpoint(t.Context(), w, a, m, returnEpoch); err == nil {
 		t.Fatal("partial rejection exported")
+	}
+}
+
+func TestCorporateStateRefCheckpointUsesOldNamespace(t *testing.T) {
+	w, api, mm, _, key := exportFixture(t)
+	w.Access = &config.Access{BotID: mm.bot}
+	root := corporateStateBinding(w, key.Channel)
+	cfg := config.Config{Workflows: []config.Workflow{root}}
+	partitions := cfg.StateWorkflows()
+	if len(partitions) != 1 || partitions[0].ID != key.Workflow || partitions[0].AgentID != "mark" {
+		t.Fatal("checkpoint alias did not resolve current role")
+	}
+	result, err := ExportCheckpoint(t.Context(), partitions[0], api, mm, returnEpoch)
+	if err != nil || result.ChannelID != key.Channel || len(api.namespaces) != 1 || api.namespaces[0] != key.Namespace() {
+		t.Fatal("checkpoint did not read preserved partition", err, api.namespaces)
 	}
 }

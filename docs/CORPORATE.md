@@ -26,3 +26,21 @@ The core chooses trusted callback endpoints, manages issue/renew/revoke and
 installs the short-lived token. Provider alone calculates service rights.
 After publication, later additions to chat/team history are the administrator's
 responsibility; the connector does not delete or reclassify prior messages.
+
+## Existing state partitions
+
+For an existing channel, set `chat_access[channel].state_ref` to its exact old
+workflow ID. This is trusted operator configuration. One role and `agent_id`
+remain shared. `ForChat` resolves current access and the channel mode before
+using the old ID for native session namespaces, operation/invocation IDs and
+local policy calls. Discovery, SSE hints and checkpoint export resolve the same
+current channel; a denied alias grants no access. Existing notes are not copied
+into a broader namespace. Provider still authorizes service memory. A changed
+role or grant may require a fresh native session.
+
+Once a binding uses `state_ref`, every route must declare one, including denied
+routes. References must be unique and may not claim another root binding. A root
+may retain its own ID for exactly one channel. Reload cannot change this mapping;
+state handover requires drained work, checked journals and a restart. Agent run
+capacity remains shared across its state partitions. Memory mode values retain
+explicit false/empty settings; they do not create a new memory service.

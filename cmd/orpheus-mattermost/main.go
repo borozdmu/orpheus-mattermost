@@ -153,10 +153,18 @@ func exportCheckpoint(ctx context.Context, workflow, epoch string) error {
 	if err != nil {
 		return err
 	}
-	for _, w := range cfg.Workflows {
+	var selected *config.Workflow
+	for _, w := range cfg.StateWorkflows() {
 		if w.ID != workflow {
 			continue
 		}
+		if selected != nil {
+			return errors.New("checkpoint state_ref must identify one channel")
+		}
+		selected = &w
+	}
+	if selected != nil {
+		w := *selected
 		token, err := config.Secret(cfg.Orpheus.TokenEnv)
 		if err != nil {
 			return err

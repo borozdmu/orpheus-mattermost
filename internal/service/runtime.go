@@ -37,6 +37,10 @@ type scheduled struct {
 
 const maxQueuedThreads = 4096
 
+func statePartition(w config.Workflow) string {
+	return w.ID + "\n" + strings.Join(w.IncludeIDs, ",")
+}
+
 type Runtime struct {
 	Engine                                         *Engine
 	Logger                                         *slog.Logger
@@ -89,11 +93,8 @@ func (r *Runtime) hint(key conversation.Key) {
 	if j := r.jobs[key]; j != nil {
 		j.Dirty = true
 	} else {
-		for _, w := range r.cfg.Workflows {
-			if w.ID == key.Workflow {
-				r.enqueue(key, w)
-				break
-			}
+		if w := r.cfg.StateWorkflow(key.Workflow, key.Channel); w != nil {
+			r.enqueue(key, *w)
 		}
 	}
 	r.mu.Unlock()
@@ -157,7 +158,7 @@ func (r *Runtime) Handler() http.Handler {
 	return mux
 }
 func reloadCompatible(a, b config.Config) bool {
-	return a.KeepUnroutedPrivateMemberships == b.KeepUnroutedPrivateMemberships && a.Transcription == b.Transcription && a.Orpheus == b.Orpheus && a.AgentBoxAPIURL == b.AgentBoxAPIURL && a.Listen == b.Listen && a.HTTPTimeout == b.HTTPTimeout && a.MaxRequestBytes == b.MaxRequestBytes
+	return config.ValidateStateRefs(b.Workflows) == nil && config.SameStateRefs(a.Workflows, b.Workflows) && a.KeepUnroutedPrivateMemberships == b.KeepUnroutedPrivateMemberships && a.Transcription == b.Transcription && a.Orpheus == b.Orpheus && a.AgentBoxAPIURL == b.AgentBoxAPIURL && a.Listen == b.Listen && a.HTTPTimeout == b.HTTPTimeout && a.MaxRequestBytes == b.MaxRequestBytes
 }
 func errorClass(err error) string {
 	switch {
@@ -241,11 +242,11 @@ func (r *Runtime) Run(ctx context.Context) error {
 			if !reloadCompatible(r.cfg, cfg) {
 				r.Logger.Error("configuration reload rejected", "reason", "process settings require restart")
 			} else {
-				for _, old := range r.cfg.Workflows {
-					r.retired[old.ID] = old
+				for _, old := range r.cfg.StateWorkflows() {
+					r.retired[statePartition(old)] = old
 				}
-				for _, w := range cfg.Workflows {
-					delete(r.retired, w.ID)
+				for _, w := range cfg.StateWorkflows() {
+					delete(r.retired, statePartition(w))
 				}
 				r.Engine.limitPosts(&cfg)
 				r.cfg = cfg
@@ -330,12 +331,12 @@ func (r *Runtime) reserve(key conversation.Key, w config.Workflow) bool {
 	blocked := !r.initialized || r.discovering
 	count := 0
 	for k, n := range r.active {
-		if k.Workflow == w.ID {
+		if owner := r.cfg.StateWorkflow(k.Workflow, k.Channel); k.Workflow == w.ID || owner != nil && owner.CapacityKey() == w.CapacityKey() {
 			count += n
 		}
 	}
 	for k := range r.unknown {
-		if k.Workflow == w.ID {
+		if owner := r.cfg.StateWorkflow(k.Workflow, k.Channel); k.Workflow == w.ID || owner != nil && owner.CapacityKey() == w.CapacityKey() {
 			blocked = true
 		}
 	}
@@ -544,10 +545,10 @@ func (r *Runtime) scan(ctx context.Context, cfg config.Config, retired []config.
 	r.channels = channelMap
 	r.mu.Unlock()
 	// Register existing sessions before admitting new runs.
-	workflows := append(slices.Clone(cfg.Workflows), retired...)
+	workflows := append(cfg.StateWorkflows(), retired...)
 	for _, w := range workflows {
 		r.mu.Lock()
-		due := time.Since(r.discovered[w.ID]) >= w.FullReconcileInterval.Value()
+		due := time.Since(r.discovered[statePartition(w)]) >= w.FullReconcileInterval.Value()
 		r.mu.Unlock()
 		if !due {
 			continue
@@ -566,13 +567,18 @@ func (r *Runtime) scan(ctx context.Context, cfg config.Config, retired []config.
 				r.Logger.Error("session identity invalid")
 				return
 			}
+			// One old namespace can contain other channels; never attach them to
+			// the current channel's role or authority during migration.
+			if len(w.IncludeIDs) > 0 && !slices.Contains(w.IncludeIDs, key.Channel) || slices.Contains(w.ExcludeIDs, key.Channel) {
+				continue
+			}
 			if !r.discoveredJob(ctx, epoch, key, w, true) {
 				return
 			}
 		}
 		r.mu.Lock()
 		if epoch == r.epoch {
-			r.discovered[w.ID] = time.Now()
+			r.discovered[statePartition(w)] = time.Now()
 		}
 		r.mu.Unlock()
 	}
