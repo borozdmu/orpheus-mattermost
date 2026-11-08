@@ -154,7 +154,7 @@ func TestActiveAuthorFilteredBeforeFiles(t *testing.T) {
 	if err := e.Thread(t.Context(), w, key, mm.channel, true); err != nil {
 		t.Fatal(err)
 	}
-	if a.attempts[len(a.attempts)-1].Envelope.Anchor != "ssssssssssssssssssssssssss" || mm.reads != 2 {
+	if a.attempts[len(a.attempts)-1].Envelope.Anchor != "ssssssssssssssssssssssssss" || mm.reads != 3 {
 		t.Fatal("excluded trigger did not remain pending")
 	}
 }
@@ -171,7 +171,7 @@ func TestScopeChangedCreatesCleanSessionWithSameInvocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	before, after := a.attempts[1], a.attempts[2]
-	if before.Session == "" || after.Session != "" || !reflect.DeepEqual(before.Envelope.AccessContext, after.Envelope.AccessContext) || !reflect.DeepEqual(before.Envelope.AccessProof, after.Envelope.AccessProof) || mm.reads != 2 {
+	if before.Session == "" || after.Session != "" || !reflect.DeepEqual(before.Envelope.AccessContext, after.Envelope.AccessContext) || !reflect.DeepEqual(before.Envelope.AccessProof, after.Envelope.AccessProof) || mm.reads != 3 {
 		t.Fatal("scope reset reissued identity")
 	}
 	if after.Envelope.Request.PreviousIndex != "" || len(after.Envelope.Request.DeliveredBatches) != 0 || strings.Contains(joinedInput(after.Messages), "OLD_PRIVATE_CONTEXT") || len(after.Envelope.Request.Files) != 1 || after.Envelope.ContextStart.PostID != after.Envelope.Anchor {
@@ -438,8 +438,10 @@ func TestAdmissionRejectsUnmappedOrUnconfirmedReaders(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			e, a, mm, box, key, w := protectedFixture(t)
 			change(mm, w.Access)
-			if err := e.Thread(t.Context(), w, key, mm.channel, true); err == nil {
-				t.Fatal("invalid audience admitted")
+			err := e.Thread(t.Context(), w, key, mm.channel, true)
+			printable := name == "missing actor mapping" || name == "unmapped silent reader"
+			if (err == nil) != printable || (mm.calls == 1) != printable {
+				t.Fatal("unexpected admission notice", err)
 			}
 			if len(a.attempts) != 0 || box.prepared != 0 {
 				t.Fatal("invalid audience reached execution")
@@ -524,8 +526,8 @@ func TestFixedPeerRecipient(t *testing.T) {
 			}
 			err := e.Thread(t.Context(), w, key, mm.channel, true)
 			if scenario != "valid" {
-				if err == nil || len(a.attempts) != 0 {
-					t.Fatal("invalid recipient set reached execution")
+				if (err == nil) != (scenario == "unknown recipient") || len(a.attempts) != 0 || (mm.calls == 1) != (scenario == "unknown recipient") {
+					t.Fatal("invalid recipient set reached execution or unexpected notice")
 				}
 				return
 			}
@@ -560,8 +562,8 @@ func TestFixedPeerDeliveryRechecksAudience(t *testing.T) {
 	r.Status, r.FinalMessageID = "completed", "final"
 	s.Messages = append(s.Messages, conversation.Message{ID: "final", RunID: r.ID, Role: "assistant", Kind: "answer", Position: 1, Text: "private answer"})
 	mm.audience = append(mm.audience, "zzzzzzzzzzzzzzzzzzzzzzzzzz")
-	if err := e.Thread(t.Context(), w, key, mm.channel, true); err == nil || mm.calls != 0 {
-		t.Fatal("sent private answer after recipient list changed")
+	if err := e.Thread(t.Context(), w, key, mm.channel, true); err != nil || mm.calls != 1 || strings.Contains(mm.posts[len(mm.posts)-1].Message, "private answer") {
+		t.Fatal("private result not withheld", err)
 	}
 	mm.audience = mm.audience[:len(mm.audience)-1]
 	for range 2 {
@@ -569,7 +571,7 @@ func TestFixedPeerDeliveryRechecksAudience(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if mm.calls != 1 {
+	if mm.calls != 2 || !strings.Contains(mm.posts[len(mm.posts)-1].Message, "private answer") {
 		t.Fatal("failed to deliver once to restored audience")
 	}
 }
@@ -582,7 +584,7 @@ func TestLocalServicesRejectsBeforeDispatchWhenPolicyUnavailable(t *testing.T) {
 	w.Services = []string{"kord-google"}
 	mm.audience = append(mm.audience, "nnnnnnnnnnnnnnnnnnnnnnnnnn", peer)
 	mm.users = map[string]mattermost.User{peer: {ID: peer, IsBot: true}}
-	if err := e.Thread(t.Context(), w, key, mm.channel, true); err == nil || !strings.Contains(err.Error(), "channel policy unavailable") {
+	if err := e.Thread(t.Context(), w, key, mm.channel, true); err != nil || mm.calls != 1 || !strings.Contains(mm.posts[len(mm.posts)-1].Message, "проверить права") {
 		t.Fatalf("policy failure must block: %v", err)
 	}
 	if len(a.attempts) != 0 {

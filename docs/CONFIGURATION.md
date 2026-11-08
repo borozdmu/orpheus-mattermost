@@ -145,7 +145,7 @@ semantic setting.
 | --- | --- | --- |
 | `services` | `[]` | Unique catalog codes passed as `configuration.sandbox.services` to the agent session |
 | `env_from` | `[]` | Worker ENV names passed as `configuration.sandbox.env_from` to the agent session |
-| `include_ids`, `exclude_ids` | `[]` | Specialized workflows reserve their channels ahead of a generic workflow |
+| `include_ids`, `exclude_ids` | `[]` | Specialized workflows reserve their channels ahead of a generic workflow; they do not opt in to private or group channels |
 | `direct_messages` | `false` | One DM owner; messages need no mention |
 | `private_channels`, `group_messages` | `false` | Explicit opt-in for private/group channels |
 | `start_on_mention` | `true` | Require a mention to start a new channel thread |
@@ -161,6 +161,18 @@ semantic setting.
 | `max_session_tokens` | `100000000` | Session token budget |
 | `max_post_chars` | `12000` | Unicode code points, also capped by the server limit |
 | `initial_context_token_budget` | `100000` | Approximate context budget, with separate API/ENV byte checks |
+
+The connector automatically leaves every joined private channel that is not
+routed to a workflow. It checks membership at startup, after configuration reload,
+on Mattermost membership events, and during polling. Set `private_channels: true`
+and, for an allowlist, `include_ids` before adding the bot. Removal failures block
+readiness and new runs until a retry succeeds; a `404` means the membership is
+already gone.
+
+Set `MATTERMOST_LEAVE_UNROUTED_PRIVATE_CHANNELS=false` when an existing bot
+must keep its memberships in private channels outside the configured routes.
+The connector skips those channels during reconciliation. The default is
+`true`. Restart the connector after changing the setting.
 
 `services` contains unique codes from the Orpheus service catalog. Unknown codes
 reject session creation. `env_from` can add individual ENV names. Configure the
@@ -181,9 +193,9 @@ without restarting the connector. Rejection notices are deduplicated by revision
 reason and input.
 
 Subsequent channel requests require a mention even when `start_on_mention=false`.
-Idle time does not close or rotate a session. Orpheus owns sandbox pauses. Budget
-exhaustion, lost sandbox/context, and revision changes can replace the session on
-the next request.
+Orpheus owns sandbox pauses and expires old paused sandboxes. Budget exhaustion,
+sandbox deletion, lost sandbox/context, and revision changes can replace the
+session on the next request. See [session continuation](CONTINUATION.md).
 
 ## Attachments and links
 
@@ -361,6 +373,8 @@ unaccepted in Mattermost; neither their text nor files enter `BuildMessages` or
 `Sandbox.Prepare`. Every delivered item has its confirmed author in the existing
 `SendMessage.access_context.input_subjects`. Renewal and publication do not fetch
 a new audience.
+
+Protected Mattermost threads show access notices from the workflow’s `reconcile_from` timestamp by default. When upgrading existing installations, set `MATTERMOST_ACCESS_NOTICES_FROM` once to the deployment timestamp (RFC 3339). `MATTERMOST_ACCESS_NOTICE_SERVICE` can name the account directory in the notice (for example `Kord`). Keep the value through restarts. Earlier requests do not generate notices. When a participant mapping is missing, the bot lists the current channel usernames and asks the requester to link the accounts and send a new mention. Notices contain no request text, provider output, email, or credentials. A denied input is recorded in the source thread and is not submitted automatically when the mapping changes. A blocked result remains subject to its original audience and the current policy. The local policy can return `identity_unconfirmed` or `participant_access_unconfirmed` with a list of Mattermost `participant_ids`, or a generic `channel_policy_denied` / `channel_policy_unavailable`. The connector verifies the live membership before displaying names.
 
 Only `409 service_scope_changed` rotates a reusable protected session. The new
 session keeps the invocation, but rebuilds only the frozen triggering posts.

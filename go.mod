@@ -6,7 +6,7 @@ require (
 	github.com/abox-dev/sdk/packages/go-sdk v0.2.0
 	github.com/coder/websocket v1.8.15
 	github.com/google/uuid v1.6.0
-	github.com/orpheus-agents/orpheus v0.6.0
+	github.com/orpheus-agents/orpheus v0.7.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/yuin/goldmark v1.8.6
 	gopkg.in/yaml.v3 v3.0.1
@@ -23,13 +23,13 @@ require (
 	github.com/prometheus/common v0.70.1 // indirect
 	github.com/prometheus/procfs v0.22.0 // indirect
 	golang.org/x/mod v0.41.0 // indirect
-	golang.org/x/sync v0.23.0 // indirect
-	golang.org/x/sys v0.48.0 // indirect
-	golang.org/x/telemetry v0.0.0-20260908163034-4bcc4b2ee518 // indirect
-	golang.org/x/tools v0.50.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/telemetry v0.0.0-20260924152758-ed294f943157 // indirect
+	golang.org/x/tools v0.51.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )
 
 tool golang.org/x/tools/cmd/deadcode
 
-replace github.com/orpheus-agents/orpheus => github.com/borozdmu/orpheus v0.0.0-20261012115841-5f006ad67130
+replace github.com/orpheus-agents/orpheus => github.com/borozdmu/orpheus v0.6.2-0.20261108095929-054696c2b19e
