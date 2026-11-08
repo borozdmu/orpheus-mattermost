@@ -90,3 +90,18 @@ func (w Workflow) CapacityKey() string {
 	}
 	return "workflow/" + w.ID
 }
+
+// StateCapacityKey identifies ownership even after a route is denied. Closing
+// admission does not prove that an existing or uncertain run has finished.
+// This lookup returns no route, authority or permission to use old state.
+func (c Config) StateCapacityKey(id, chat string) string {
+	for _, w := range c.Workflows {
+		if w.ID == id {
+			return w.CapacityKey()
+		}
+		if route, ok := w.ChatAccess[chat]; ok && route.StateRef == id {
+			return w.CapacityKey()
+		}
+	}
+	return "workflow/" + id
+}

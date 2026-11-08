@@ -331,12 +331,12 @@ func (r *Runtime) reserve(key conversation.Key, w config.Workflow) bool {
 	blocked := !r.initialized || r.discovering
 	count := 0
 	for k, n := range r.active {
-		if owner := r.cfg.StateWorkflow(k.Workflow, k.Channel); k.Workflow == w.ID || owner != nil && owner.CapacityKey() == w.CapacityKey() {
+		if k.Workflow == w.ID || r.cfg.StateCapacityKey(k.Workflow, k.Channel) == w.CapacityKey() {
 			count += n
 		}
 	}
 	for k := range r.unknown {
-		if owner := r.cfg.StateWorkflow(k.Workflow, k.Channel); k.Workflow == w.ID || owner != nil && owner.CapacityKey() == w.CapacityKey() {
+		if k.Workflow == w.ID || r.cfg.StateCapacityKey(k.Workflow, k.Channel) == w.CapacityKey() {
 			blocked = true
 		}
 	}
