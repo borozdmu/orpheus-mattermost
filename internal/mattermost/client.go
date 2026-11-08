@@ -39,6 +39,7 @@ type Post struct {
 func (p Post) Root() string { return cmp.Or(p.RootID, p.ID) }
 
 type Channel struct {
+	Shared      *bool  `json:"shared"`
 	ID          string `json:"id"`
 	TeamID      string `json:"team_id"`
 	Name        string `json:"name"`
@@ -47,6 +48,7 @@ type Channel struct {
 	DeleteAt    int64  `json:"delete_at"`
 }
 type User struct {
+	Roles    string `json:"roles"`
 	ID       string `json:"id"`
 	Username string `json:"username"`
 	Email    string `json:"email"`

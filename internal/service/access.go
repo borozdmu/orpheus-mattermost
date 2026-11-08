@@ -11,6 +11,7 @@ import (
 	"github.com/orpheus-agents/orpheus-mattermost/internal/config"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/conversation"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/mattermost"
+	"github.com/orpheus-agents/orpheus/agentcontract"
 	api "github.com/orpheus-agents/orpheus/client"
 )
 
@@ -150,10 +151,25 @@ func (e *Engine) readAudience(ctx context.Context, w config.Workflow, key conver
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	if ch.ID != key.Channel || ch.Type != "P" || ch.DeleteAt != 0 || w.Access.BotID != e.Bot.ID || !slices.Contains(w.IncludeIDs, key.Channel) {
+
+	if ch.ID != key.Channel || !protectedChannelType(w, ch.Type) || ch.Shared != nil && *ch.Shared || ch.DeleteAt != 0 || w.Access.BotID != e.Bot.ID || !slices.Contains(w.IncludeIDs, key.Channel) {
 		return nil, time.Time{}, errors.New("protected channel binding mismatch")
 	}
-	audience, err := e.MM.Audience(ctx, key.Channel)
+	var audience []string
+	if w.AgentID != "" && ch.Type == "O" {
+		if ch.Shared == nil || *ch.Shared {
+			return nil, time.Time{}, errors.New("shared-team coverage unknown")
+		}
+		source, ok := e.MM.(interface {
+			TeamAudience(context.Context, string) ([]string, string, error)
+		})
+		if !ok {
+			return nil, time.Time{}, errors.New("team audience API unavailable")
+		}
+		audience, _, err = source.TeamAudience(ctx, ch.TeamID)
+	} else {
+		audience, err = e.MM.Audience(ctx, key.Channel)
+	}
 	if err != nil {
 		return nil, time.Time{}, err
 	}
@@ -180,7 +196,7 @@ func (e *Engine) readAudience(ctx context.Context, w config.Workflow, key conver
 	if time.Since(observed) >= time.Minute {
 		return nil, time.Time{}, errors.New("audience observation expired")
 	}
-	return audience, observed, nil
+	return audience, observed, confirmAccountCards(ctx, w.Access, audience)
 }
 
 // Admission is called after the coordinator reserves a run slot. The result is
@@ -210,7 +226,15 @@ func (e *Engine) admission(ctx context.Context, w config.Workflow, key conversat
 	if err != nil {
 		return nil, nil, err
 	}
-	proof := &conversation.AccessProof{AudienceSubjects: slices.Clone(audience), ProjectionDigest: digest}
+	var descriptor *agentcontract.Audience
+	if w.AgentID != "" {
+		value, err := e.describeAudience(ctx, w, key, audience)
+		if err != nil {
+			return nil, nil, err
+		}
+		descriptor = &value
+	}
+	proof := &conversation.AccessProof{Audience: descriptor, AudienceSubjects: slices.Clone(audience), ProjectionDigest: digest}
 	access := &api.AccessContext{InvocationID: key.Invocation(env.Anchor), Subject: api.AccessSubject{Namespace: w.Access.Namespace, ID: subject}, ScopeContext: scope, ContextObservedAt: observed, AllowedInputSubjects: &allowed}
 	return access, proof, nil
 }
@@ -230,4 +254,34 @@ func (e *Engine) cleanPending(ctx context.Context, p pending) (pending, error) {
 	env.AccessProof = p.Envelope.AccessProof
 	p.Envelope, p.Messages, p.Session = env, messages, ""
 	return p, nil
+}
+
+func (e *Engine) describeAudience(ctx context.Context, w config.Workflow, key conversation.Key, readers []string) (agentcontract.Audience, error) {
+	ch, err := e.MM.Channel(ctx, key.Channel)
+	a := agentcontract.Audience{Kind: "exact", Instance: w.Mattermost.BaseURL, ChannelID: key.Channel, ChannelType: ch.Type, Complete: true}
+	if err != nil || ch.ID != key.Channel || ch.DeleteAt != 0 || ch.Shared != nil && *ch.Shared {
+		return a, errors.New("channel audience unavailable")
+	}
+	if ch.Type == "O" {
+		if !w.PublicTeamAudience || ch.Shared == nil {
+			return a, errors.New("unconfirmed public audience")
+		}
+		source, ok := e.MM.(interface {
+			TeamAudience(context.Context, string) ([]string, string, error)
+		})
+		if !ok {
+			return a, errors.New("team API unavailable")
+		}
+		current, revision, err := source.TeamAudience(ctx, ch.TeamID)
+		if err != nil || !slices.Equal(current, readers) {
+			return a, errors.New("team changed during observation")
+		}
+		a.Kind = "team-current"
+		a.Groups = []agentcontract.AudienceGroup{{Instance: w.Mattermost.BaseURL, TeamID: ch.TeamID, Revision: revision}}
+	}
+	return a, a.Validate()
+}
+
+func protectedChannelType(w config.Workflow, kind string) bool {
+	return kind == "P" || w.AgentID != "" && (kind == "D" || kind == "O" && w.PublicTeamAudience)
 }

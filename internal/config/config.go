@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/orpheus-agents/orpheus-mattermost/internal/sandbox"
+	"github.com/orpheus-agents/orpheus/agentcontract"
 	"gopkg.in/yaml.v3"
 )
 
@@ -50,6 +51,10 @@ type Links struct {
 }
 
 type Workflow struct {
+	PublicTeamAudience bool                  `yaml:"public_team_audience" json:"public_team_audience,omitzero"`
+	Modes              map[string]ChatMode   `yaml:"modes" json:"modes,omitzero"`
+	AgentID            string                `yaml:"agent_id" json:"agent_id,omitzero"`
+	ChatAccess         map[string]ChatAccess `yaml:"chat_access" json:"chat_access,omitzero"`
 	// LocalBeforeRunPython is trusted administrator code, never message content.
 	LocalBeforeRunPython string `yaml:"local_before_run_python" json:"local_before_run_python,omitzero"`
 
@@ -183,6 +188,10 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		if err != nil {
 			return Config{}, fmt.Errorf("read workflow %s: %w", name, err)
 		}
+		raw, err = agentcontract.ResolveRole(raw, cfg.WorkflowsDir)
+		if err != nil {
+			return Config{}, err
+		}
 		w, err := parseWorkflow(raw)
 		if err != nil {
 			return Config{}, fmt.Errorf("workflow %s: %w", name, err)
@@ -261,6 +270,25 @@ func (c *Config) validate() error {
 			return fmt.Errorf("workflow %d: invalid identity, revision, profile or template", i)
 		}
 		ids[w.ID] = true
+		if len(w.ChatAccess) > 0 {
+			if w.AgentID == "" || w.Access != nil || len(w.ChatAccess) != len(w.IncludeIDs) {
+				return errors.New("invalid corporate chat registry")
+			}
+			for _, chat := range w.IncludeIDs {
+				if w.ChatAccess[chat].Deny {
+					continue
+				}
+				child, err := w.ForChat(chat)
+				if err != nil {
+					return err
+				}
+				cc := *c
+				cc.Workflows = []Workflow{child}
+				if err = cc.validate(); err != nil {
+					return err
+				}
+			}
+		}
 		envNames := make(map[string]bool, len(w.EnvFrom))
 		for _, name := range w.EnvFrom {
 			if !envPattern.MatchString(name) || envNames[name] {
@@ -364,7 +392,7 @@ func (c *Config) validate() error {
 		if w.Links.MaxLinks < 1 || w.Links.MaxLinks > 5 || w.Links.MaxPosts < 2 || w.Links.MaxPosts > 20 {
 			return errors.New("invalid link expansion limits")
 		}
-		if w.LocalBeforeRunPython != "" && (len(w.LocalBeforeRunPython) > 64<<10 || len(sandbox.LocalBeforeRun(w.LocalBeforeRunPython)) > 64<<10 || strings.ContainsRune(w.LocalBeforeRunPython, 0) || w.Access == nil || !w.Access.LocalServices) {
+		if len(w.ChatAccess) == 0 && w.LocalBeforeRunPython != "" && (len(w.LocalBeforeRunPython) > 64<<10 || len(sandbox.LocalBeforeRun(w.LocalBeforeRunPython)) > 64<<10 || strings.ContainsRune(w.LocalBeforeRunPython, 0) || w.Access == nil || !w.Access.LocalServices) {
 			return errors.New("local before-run Python requires local services and at most 64 KiB without NUL")
 		}
 		if a := w.Access; a != nil {
@@ -380,7 +408,7 @@ func (c *Config) validate() error {
 			if a.LocalServices && (a.ChannelOnly || a.Peer == nil || len(w.Services) == 0 || len(w.EnvFrom) != 0 || len(w.TriggerBotIDs) != 0) {
 				return errors.New("local-service workflows require a fixed peer and selected services, without channel-only mode, harness secrets or bot triggers")
 			}
-			if (!a.ChannelOnly && len(w.Services) == 0) || len(w.IncludeIDs) == 0 || !w.PrivateChannels || w.DirectMessages || w.GroupMessages || !*w.StartOnMention || *w.Links.Enabled {
+			if (!a.ChannelOnly && len(w.Services) == 0) || len(w.IncludeIDs) == 0 || (!w.PrivateChannels && !w.PublicTeamAudience) || w.DirectMessages && w.AgentID == "" || w.GroupMessages || !*w.StartOnMention || *w.Links.Enabled {
 				return errors.New("protected workflows require services, explicit private channels, mentions and disabled link expansion")
 			}
 		}
@@ -441,17 +469,34 @@ func (c Config) Route(channelID, kind string) (*Workflow, error) {
 	}
 	for i := range c.Workflows {
 		w := &c.Workflows[i]
+		if len(w.ChatAccess) > 0 {
+			if !slices.Contains(w.IncludeIDs, channelID) {
+				continue
+			}
+			if w.ChatAccess[channelID].Deny {
+				continue
+			}
+			resolved, err := w.ForChat(channelID)
+			if err != nil {
+				return nil, err
+			}
+			w = &resolved
+		}
 		allowed := kind == "O" || kind == "P" && w.PrivateChannels || kind == "G" && w.GroupMessages || kind == "D" && w.DirectMessages
 		if !allowed {
 			continue
 		}
-		if kind != "D" && (slices.Contains(w.ExcludeIDs, channelID) || len(w.IncludeIDs) > 0 && !slices.Contains(w.IncludeIDs, channelID) || len(w.IncludeIDs) == 0 && specialized) {
+		if (kind != "D" || w.AgentID != "") && (slices.Contains(w.ExcludeIDs, channelID) || len(w.IncludeIDs) > 0 && !slices.Contains(w.IncludeIDs, channelID) || len(w.IncludeIDs) == 0 && specialized) {
 			continue
 		}
 		if selected != nil {
 			return nil, errors.New("ambiguous channel owner")
 		}
-		selected = w
+		resolved, err := w.ForChat(channelID)
+		if err != nil {
+			return nil, err
+		}
+		selected = &resolved
 	}
 	return selected, nil
 }
@@ -483,4 +528,81 @@ func (c Config) Groups() map[Endpoint]Config {
 func (e Endpoint) Source(botID string) string {
 	hash := sha256.Sum256([]byte(e.BaseURL + "\n" + botID))
 	return hex.EncodeToString(hash[:16])
+}
+
+type ChatAccess struct {
+	Mode   string  `yaml:"mode" json:"mode,omitzero"`
+	Access *Access `yaml:"access_context" json:"access_context"`
+	Deny   bool    `yaml:"deny" json:"deny,omitzero"`
+}
+
+func (w Workflow) ForChat(chat string) (Workflow, error) {
+	if len(w.ChatAccess) == 0 {
+		return w, nil
+	}
+	entry, ok := w.ChatAccess[chat]
+	if !ok || entry.Deny || entry.Access == nil {
+		return Workflow{}, errors.New("chat is not allowed")
+	}
+	if entry.Mode != "" {
+		mode, ok := w.Modes[entry.Mode]
+		if !ok {
+			return Workflow{}, errors.New("unknown chat mode")
+		}
+		for _, service := range mode.Services {
+			if !slices.Contains(w.Services, service) {
+				return Workflow{}, errors.New("mode exceeds agent service ceiling")
+			}
+		}
+		if mode.Services != nil {
+			w.Services = slices.Clone(mode.Services)
+		}
+		if mode.ServicesCeilingPolicy != nil {
+			for _, service := range w.Services {
+				if !slices.Contains(mode.ServicesCeilingPolicy.Services, service) {
+					return Workflow{}, errors.New("personal service ceiling exceeded")
+				}
+			}
+		}
+		if mode.PrivateChannels != nil {
+			w.PrivateChannels = *mode.PrivateChannels
+		}
+		if mode.PublicTeamAudience != nil {
+			w.PublicTeamAudience = *mode.PublicTeamAudience
+		}
+		if mode.ReconcileFrom != "" {
+			w.ReconcileFrom = mode.ReconcileFrom
+			parsed, err := time.Parse(time.RFC3339, w.ReconcileFrom)
+			if err != nil {
+				return Workflow{}, err
+			}
+			w.Since = parsed
+		}
+		w.AdmissionCheckpoint = mode.AdmissionCheckpoint
+		if mode.StartOnMention != nil {
+			w.StartOnMention = mode.StartOnMention
+		}
+	}
+	w.Modes = nil
+	w.ChatAccess = nil
+	w.IncludeIDs = []string{chat}
+	w.Access = entry.Access
+	return w, nil
+}
+
+type ServiceCeilingPolicy struct {
+	Services []string `yaml:"services" json:"services"`
+	Revision string   `yaml:"revision" json:"revision"`
+}
+type ChatMode struct {
+	PrivateChannels       *bool                 `yaml:"private_channels" json:"private_channels,omitzero"`
+	PublicTeamAudience    *bool                 `yaml:"public_team_audience" json:"public_team_audience,omitzero"`
+	ReconcileFrom         string                `yaml:"reconcile_from" json:"reconcile_from,omitzero"`
+	AdmissionCheckpoint   *AdmissionCheckpoint  `yaml:"admission_checkpoint" json:"admission_checkpoint,omitzero"`
+	Services              []string              `yaml:"services" json:"services,omitzero"`
+	Memory                *bool                 `yaml:"memory" json:"memory,omitzero"`
+	MemorySharedServices  []string              `yaml:"memory_shared_services" json:"memory_shared_services,omitzero"`
+	MemorySharedRevision  *string               `yaml:"memory_shared_revision" json:"memory_shared_revision,omitzero"`
+	ServicesCeilingPolicy *ServiceCeilingPolicy `yaml:"services_ceiling_policy" json:"services_ceiling_policy,omitzero"`
+	StartOnMention        *bool                 `yaml:"start_on_mention" json:"start_on_mention,omitzero"`
 }
