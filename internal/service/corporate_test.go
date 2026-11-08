@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/orpheus-agents/orpheus-mattermost/internal/config"
 	"github.com/orpheus-agents/orpheus/agentcontract"
 	api "github.com/orpheus-agents/orpheus/client"
 )
@@ -162,5 +163,25 @@ func TestCorporatePublicAdmissionUsesAllCurrentTeamUsers(t *testing.T) {
 	source.team = append(source.team, "uuuuuuuuuuuuuuuuuuuuuuuuuu")
 	if e.confirmCorporate(t.Context(), task) == nil {
 		t.Fatal("unknown team reader accepted")
+	}
+}
+
+func TestCorporatePeerRequiresRegisteredOwnerAndKeepsBothIdentities(t *testing.T) {
+	_, _, mm, _, _, w := protectedFixture(t)
+	peer := "nnnnnnnnnnnnnnnnnnnnnnnnnn"
+	w.Access.Peer = &config.PeerRecipient{ID: peer, Field: "peer_id"}
+	delete(w.Access.IdentityProjection.Subjects, peer)
+	roster := []string{mm.bot, mm.posts[0].UserID, peer}
+	if _, err := corporateReaders(w, roster); err == nil {
+		t.Fatal("peer without employee owner accepted")
+	}
+	w.Access.Peer.BotID = config.SubjectID(`71`)
+	w.Access.Peer.OwnerUserID = config.SubjectID(`77`)
+	readers, err := corporateReaders(w, roster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readers[len(readers)-1].ID != peer || readers[len(readers)-1].BotID != "71" || readers[len(readers)-1].PrincipalID != "77" {
+		t.Fatal("bot registration lost")
 	}
 }

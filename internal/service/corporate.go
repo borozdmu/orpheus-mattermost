@@ -23,6 +23,15 @@ func corporateReaders(w config.Workflow, roster []string) ([]agentcontract.Princ
 			continue
 		}
 		mapped, ok := w.Access.IdentityProjection.Subjects[id]
+		botID := ""
+		if peer := w.Access.Peer; peer != nil && peer.ID == id && len(peer.BotID) > 0 && len(peer.OwnerUserID) > 0 {
+			mapped, ok = peer.OwnerUserID, true
+			rawBot, err := peer.BotID.MarshalJSON()
+			if err != nil {
+				return nil, err
+			}
+			botID = strings.Trim(string(rawBot), "\"")
+		}
 		if !ok {
 			return nil, errors.New("unmapped reader")
 		}
@@ -30,7 +39,7 @@ func corporateReaders(w config.Workflow, roster []string) ([]agentcontract.Princ
 		if err != nil {
 			return nil, err
 		}
-		readers = append(readers, agentcontract.Principal{Namespace: w.Access.Namespace, ID: id, PrincipalID: strings.Trim(string(raw), "\"")})
+		readers = append(readers, agentcontract.Principal{BotID: botID, Namespace: w.Access.Namespace, ID: id, PrincipalID: strings.Trim(string(raw), "\"")})
 	}
 	return readers, nil
 }

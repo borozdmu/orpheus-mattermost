@@ -35,8 +35,10 @@ func (a *Access) LocalPolicy() bool {
 // PeerRecipient names a mandatory bot that can see the channel but cannot author inputs.
 // Field carries its observed source identity to the service authorizing this exact binding.
 type PeerRecipient struct {
-	ID    string `yaml:"id" json:"id"`
-	Field string `yaml:"field" json:"field"`
+	BotID       SubjectID `yaml:"bot_id,omitempty" json:"bot_id,omitzero"`
+	OwnerUserID SubjectID `yaml:"owner_user_id,omitempty" json:"owner_user_id,omitzero"`
+	ID          string    `yaml:"id" json:"id"`
+	Field       string    `yaml:"field" json:"field"`
 }
 
 type IdentityProjection struct {
@@ -116,6 +118,17 @@ func (a Access) Validate() error {
 		return errors.New("audience field overlaps static context")
 	}
 	if peer := a.Peer; peer != nil {
+		if (len(peer.BotID) == 0) != (len(peer.OwnerUserID) == 0) {
+			return errors.New("peer registration requires both bot and owner identity")
+		}
+		if len(peer.BotID) > 0 {
+			if _, err := peer.BotID.MarshalJSON(); err != nil {
+				return err
+			}
+			if _, err := peer.OwnerUserID.MarshalJSON(); err != nil {
+				return err
+			}
+		}
 		_, mapped := p.Subjects[peer.ID]
 		_, overlaps := a.ScopeContext[peer.Field]
 		if !ValidID(peer.ID) || peer.ID == a.BotID || mapped || !envPattern.MatchString(peer.Field) || len(peer.Field) > 128 || peer.Field == p.ActorField || peer.Field == p.AudienceField || overlaps {
