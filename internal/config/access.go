@@ -14,6 +14,7 @@ import (
 // Access maps confirmed source identities into an integration's service context.
 // The provider owns the meaning of fields and mapped identities.
 type Access struct {
+	VerifyAccountCards   bool               `yaml:"verify_account_cards,omitempty" json:"verify_account_cards,omitempty"`
 	LocalProviderContext bool               `yaml:"local_provider_context,omitempty" json:"local_provider_context,omitempty"`
 	LocalFiles           bool               `yaml:"local_files,omitempty" json:"local_files,omitempty"`
 	ChannelOnly          bool               `yaml:"channel_only,omitempty" json:"channel_only,omitempty"`

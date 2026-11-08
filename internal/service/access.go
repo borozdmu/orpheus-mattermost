@@ -180,7 +180,7 @@ func (e *Engine) readAudience(ctx context.Context, w config.Workflow, key conver
 	if time.Since(observed) >= time.Minute {
 		return nil, time.Time{}, errors.New("audience observation expired")
 	}
-	return audience, observed, nil
+	return audience, observed, confirmAccountCards(ctx, w.Access, audience)
 }
 
 // Admission is called after the coordinator reserves a run slot. The result is
