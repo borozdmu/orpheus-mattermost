@@ -32,4 +32,4 @@ require (
 
 tool golang.org/x/tools/cmd/deadcode
 
-replace github.com/orpheus-agents/orpheus => github.com/borozdmu/orpheus v0.6.2-0.20261108095929-054696c2b19e
+replace github.com/orpheus-agents/orpheus => github.com/borozdmu/orpheus v0.6.2-0.20261108183835-e94e5e3aabd1

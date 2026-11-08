@@ -8,8 +8,8 @@ github.com/apapsch/go-jsonmerge/v2 v2.0.0/go.mod h1:lvDnEdqiQrp0O42VQGgmlKpxL1AP
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
 github.com/bmatcuk/doublestar v1.1.1/go.mod h1:UD6OnuiIn0yFxxA2le/rnRU1G4RaI4UvFv1sNto9p6w=
-github.com/borozdmu/orpheus v0.6.2-0.20261108095929-054696c2b19e h1:eyKMkUUOKmcPQZNqzVlHfQE3Uu4x++OKZX67Z968ROU=
-github.com/borozdmu/orpheus v0.6.2-0.20261108095929-054696c2b19e/go.mod h1:/7vwgusPN+IAvGYrhW4SF0/70LGWmG7ugiHc/ghNUm4=
+github.com/borozdmu/orpheus v0.6.2-0.20261108183835-e94e5e3aabd1 h1:dENmMsmm5knNKUTyAY6/h9RPqblIB5mIULC7u+o+M4M=
+github.com/borozdmu/orpheus v0.6.2-0.20261108183835-e94e5e3aabd1/go.mod h1:7y/nrEnwONRDS/D0nZbDBy9sdqsk7SwnAIG0/uOOt9w=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
 github.com/coder/websocket v1.8.15 h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNUA=

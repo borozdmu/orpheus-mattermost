@@ -232,3 +232,7 @@ The receiver checks every observed human's stable Mattermost ID, expected
 internal account and agent grant. An unknown account, denial or unavailable
 directory blocks admission. Bot and peer checks remain part of the binding.
 The directory credential stays with the receiver.
+
+For shared Box roles, the common assignment and complete current-reader checks,
+see [corporate bindings](docs/CORPORATE.md). Public-team access is explicit and
+fails closed unless unrestricted membership visibility is proven.

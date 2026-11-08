@@ -65,7 +65,9 @@ type VoiceTranscriber interface {
 }
 
 type Engine struct {
-	Voice VoiceTranscriber
+	corporateMu     sync.RWMutex
+	corporateConfig *config.Config
+	Voice           VoiceTranscriber
 
 	Config       config.Config
 	MM           MM
@@ -551,6 +553,9 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 		latest = &snapshot.Sessions[len(snapshot.Sessions)-1]
 	}
 	initial := latest == nil || !latest.Reusable(w.EffectiveRevision)
+	if run != nil && w.AgentID != "" {
+		return nil
+	}
 	if run != nil {
 		if current.Revision != w.EffectiveRevision || run.Status != "running" {
 			return nil
@@ -562,7 +567,7 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 	builder := conversation.Builder{Source: e.MM, Config: e.Config, Workflow: w, Bot: e.Bot}
 	var runContract conversation.Envelope
 	if w.Access != nil {
-		if channel.Type != "P" || w.Access.BotID != e.Bot.ID {
+		if !protectedChannelType(w, channel.Type) || w.Access.BotID != e.Bot.ID {
 			return errors.New("protected channel binding mismatch")
 		}
 		retained := latest
@@ -755,6 +760,11 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 			}
 			frozen.Envelope.AccessContext = access
 			frozen.Envelope.AccessProof = proof
+		}
+	}
+	if run == nil {
+		if err := corporateAssignment(&frozen); err != nil {
+			return err
 		}
 	}
 	e.set(key, frozen)

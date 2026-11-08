@@ -140,6 +140,7 @@ func candidate(p mattermost.Post, ch mattermost.Channel, w config.Workflow, bot 
 }
 func (r *Runtime) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("POST /internal/audience/confirm", r.Engine.corporateHandler())
 	health := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /healthz", health)
@@ -188,6 +189,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 		}
 	}
 	r.cfg = r.Engine.Config
+	r.Engine.setCorporateConfig(r.cfg)
 	r.wake = make(chan struct{}, 1)
 	r.jobs = map[conversation.Key]*scheduled{}
 	r.channels = map[string]mattermost.Channel{}
@@ -247,6 +249,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 				}
 				r.Engine.limitPosts(&cfg)
 				r.cfg = cfg
+				r.Engine.setCorporateConfig(cfg)
 				r.epoch++
 				r.scanAt = time.Time{}
 				r.scanned = map[string]time.Time{}
