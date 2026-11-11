@@ -106,6 +106,16 @@ using the production image and local mock dependencies.
 
 ## CI and releases
 
+After merging into `main`, wait for this project's exact SHA to appear in the
+[latest verified manifest](https://github.com/borozdmu/ai-agents-releases-ci/blob/latest-verified/latest.json)
+before releasing. If it is absent, inspect the
+[`cross-repository.yml` run history](https://github.com/borozdmu/ai-agents-releases-ci/actions/workflows/cross-repository.yml)
+for pending product CI or cross-repository failures. To run it manually, select
+**Run workflow** on `main` with `latest: true`; add `force: true` to retry after a
+failure. A previous success does not verify a new SHA. This checks compatibility
+and installs nothing on the server; installation is a separate step requiring
+separate approval.
+
 Pull requests and pushes to `main` run `make check` and `make smoke`.
 Pushing a version tag such as `v0.1.0` builds and publishes
 `retailcrm/orpheus-mattermost:0.1.0` for `linux/amd64` and `linux/arm64`.
