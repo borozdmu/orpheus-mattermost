@@ -57,16 +57,16 @@ func TestAccountDirectoryConfirmsRealBooleanWithoutRecordingTheAssignment(t *tes
 			t.Cleanup(func() { os.Stdout = prevOut; _ = out.Close() })
 			real := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if err := confirmAccountCards(r.Context(), access, []string{"bot", actor}); err != nil {
-					http.Error(w, "audience unconfirmed", 403)
+					http.Error(w, "audience unconfirmed", http.StatusForbidden)
 					return
 				}
-				w.WriteHeader(200)
+				w.WriteHeader(http.StatusOK)
 			})
 			r := httptest.NewRequest(http.MethodPost, "/internal/audience/confirm", strings.NewReader("private signed assignment text"))
 			r.Header.Set(directoryProbeHeader, trace)
 			rec := httptest.NewRecorder()
 			withDirectoryProbe(real).ServeHTTP(rec, r)
-			if received != trace || (rec.Code == 200) != tc.allowed {
+			if received != trace || (rec.Code == http.StatusOK) != tc.allowed {
 				t.Fatal("route or result mismatch")
 			}
 			raw, err := os.ReadFile(out.Name())
