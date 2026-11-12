@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"slices"
 	"strings"
 )
@@ -46,6 +47,10 @@ func (c *Client) ModelSettings(ctx context.Context, bot, channel string) (map[st
 	var prefs []modelPreference
 	category := "model_" + channel
 	err := c.json(ctx, "GET", "/users/"+bot+"/preferences/"+category, nil, &prefs)
+	if Status(err) == http.StatusNotFound {
+		// Mattermost returns 404 for a category with no preferences.
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
