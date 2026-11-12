@@ -7,7 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/url"
+
 	"os"
 	"strings"
 	"time"
@@ -44,9 +44,9 @@ func confirmAccountCards(ctx context.Context, access *config.Access, roster []st
 	if len(accounts) == 0 {
 		return denied
 	}
-	address, err := url.Parse(os.Getenv("ORPHEUS_ACCOUNT_DIRECTORY_URL"))
+	address, err := accountDirectoryURL(sharedProviderDirectory)
 	token := os.Getenv("ORPHEUS_ACCOUNT_DIRECTORY_TOKEN")
-	if err != nil || address.Scheme != "https" || address.Host == "" || address.User != nil || address.Fragment != "" || address.RawQuery != "" || len(token) < 32 || strings.ContainsAny(token, "\r\n") {
+	if err != nil || len(token) < 32 || strings.ContainsAny(token, "\r\n") {
 		return denied
 	}
 	id := uuid.NewString()
@@ -55,12 +55,17 @@ func confirmAccountCards(ctx context.Context, access *config.Access, roster []st
 	if err != nil {
 		return denied
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, address.String(), bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, address, bytes.NewReader(data))
 	if err != nil {
 		return denied
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
+	trace, _ := ctx.Value(directoryProbeKey{}).(string)
+	if trace != "" {
+		req.Header.Set(directoryProbeHeader, trace)
+		directoryEvent(trace, id, "rpc", "")
+	}
 	response, err := accountDirectoryHTTP.Do(req)
 	if err != nil {
 		return denied
@@ -73,14 +78,18 @@ func confirmAccountCards(ctx context.Context, access *config.Access, roster []st
 		return denied
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, 4097))
-	var result struct {
-		ID        string `json:"request_id"`
-		OK        bool   `json:"ok"`
-		Confirmed bool   `json:"result"`
-	}
-	if err != nil || len(body) > 4096 || json.Unmarshal(body, &result) != nil || result.ID != id || !result.OK || !result.Confirmed {
+	if err != nil || len(body) > 4096 {
 		return denied
 	}
+	confirmed, valid := directoryDecision(body, id)
+	if !valid {
+		return denied
+	}
+	if !confirmed {
+		directoryEvent(trace, id, "decision", "deny")
+		return denied
+	}
+	directoryEvent(trace, id, "decision", "allow")
 	return nil
 }
 

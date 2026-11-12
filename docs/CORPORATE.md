@@ -46,3 +46,5 @@ capacity remains shared across its state partitions. Memory mode values retain
 explicit false/empty settings; they do not create a new memory service.
 Closing a route does not release its running or uncertain admission from the
 agent's capacity limit. Its terminal state must be confirmed first.
+
+Для работы с единым Provider задайте `KORD_PROVIDER_ENDPOINT_MODE=shared-file`. Подключите общий каталог `/etc/kord/provider-address` к `/run/kord-provider-address` только для чтения. Удалите индивидуальные адреса `ORPHEUS_ACCOUNT_DIRECTORY_URL` и `KORD_PROVIDER_URL`. Коннектор перечитывает файл `url` перед каждым подтверждением читателей и использует прежний служебный ключ. При проверке `POST /internal/audience/confirm` с заголовком `X-Kord-Route-Probe` журнал связывает номер запроса с явным ответом Provider. Ключи, тексты заданий и списки читателей в эти события не включаются.
