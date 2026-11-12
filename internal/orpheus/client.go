@@ -106,7 +106,7 @@ func (c *Client) Sessions(ctx context.Context, namespace, external string) ([]co
 			if ptr(s.Namespace) != namespace {
 				return nil, errors.New("orpheus namespace mismatch")
 			}
-			result = append(result, conversation.Session{LocalFiles: ptr(s.Configuration.Hooks.AfterRun) == sandbox.LocalAfterRun(), Model: s.Configuration.Agent.Model, ID: s.ID.String(), AllowMultipleRuns: s.AllowMultipleRuns, ExternalKey: ptr(s.ExternalKey), CreatedAt: s.CreatedAt, SandboxID: ptr(s.Sandbox.ID), SandboxState: string(s.Sandbox.State), SandboxLastState: ptr(s.Sandbox.LastKnownState), Workspace: ptr(s.Sandbox.Workspace), TotalTokens: s.Usage.TotalTokens, MaxTokens: s.Configuration.Limits.MaxSessionTokens})
+			result = append(result, conversation.Session{LocalFiles: ptr(s.Configuration.Hooks.AfterRun) == sandbox.LocalAfterRun(), Profile: s.Configuration.Agent.Profile, Model: s.Configuration.Agent.Model, ID: s.ID.String(), AllowMultipleRuns: s.AllowMultipleRuns, ExternalKey: ptr(s.ExternalKey), CreatedAt: s.CreatedAt, SandboxID: ptr(s.Sandbox.ID), SandboxState: string(s.Sandbox.State), SandboxLastState: ptr(s.Sandbox.LastKnownState), Workspace: ptr(s.Sandbox.Workspace), TotalTokens: s.Usage.TotalTokens, MaxTokens: s.Configuration.Limits.MaxSessionTokens})
 		}
 		if p.NextCursor == nil {
 			break

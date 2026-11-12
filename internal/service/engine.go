@@ -564,6 +564,10 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 	}
 	rejected := p.Rejected(w.EffectiveRevision)
 	posts := slices.DeleteFunc(slices.Clone(p.Posts), func(post mattermost.Post) bool { return rejected[post.ID] })
+	posts, err = e.modelCommands(ctx, w, channel, p, posts)
+	if err != nil || len(posts) == 0 {
+		return err
+	}
 	builder := conversation.Builder{Source: e.MM, Config: e.Config, Workflow: w, Bot: e.Bot}
 	var runContract conversation.Envelope
 	if w.Access != nil {
@@ -704,6 +708,23 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 	}
 	// The complete linked index is bounded by the transport budget; payload is
 	// frozen before the first POST, including the renderer and workflow revision.
+	if initial && latest != nil && orpheus.InModelFamily(w.Profile, latest.Profile) {
+		w.Profile = latest.Profile
+	} else if initial && latest == nil {
+		if store, ok := e.MM.(chatModels); ok {
+			for _, post := range p.Posts {
+				if post.ID != key.Root {
+					continue
+				}
+				settings, err := store.ModelSettings(ctx, e.Bot.ID, key.Channel)
+				if err != nil {
+					return err
+				}
+				w.Profile = selectedChatModel(settings, w.Profile, post.CreateAt, post.ID)
+				break
+			}
+		}
+	}
 	frozen := pending{Workflow: w, Envelope: env, Messages: messages, Predecessor: predecessor}
 	if run != nil {
 		frozen.Session = current.ID
