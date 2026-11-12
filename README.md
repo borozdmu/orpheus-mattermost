@@ -28,6 +28,10 @@ object in message history and events but sends only each item's `text` to the ag
 External keys identify the thread
 and anchor post; they do not replace the accepted input snapshot.
 
+## Chat model settings
+
+Channel administrators and system administrators can post `@bot /model` to list the current selection and the available model and effort pairs. Post `@bot /model <model> <effort>` to select one for new threads in that channel. In direct messages, a system administrator can use `/model`. The bot stores the selection in its own Mattermost preferences. Configure the workflow's base profile and any named variants (`<base>--<variant>`) in Orpheus. Existing conversations retain their selected profile.
+
 ## Run
 
 1. Copy `.env.dist` to `.env` and set the Orpheus URL and credentials.

@@ -11,7 +11,7 @@ func TestMessageCost(t *testing.T) {
 	b := Basis{FX: map[string]float64{"2026-11-03": 80}, Models: map[string]Price{"sol": {Input: 2, Cached: 0.1, Output: 10}}}
 	// Reasoning is already part of output; cached input replaces normal input.
 	got := Format("sol", Usage{Input: 1000000, Cached: 500000, Output: 100000, Total: 1100000}, d, b)
-	if !strings.Contains(got, "≈164,00 ₽") {
+	if got != "Стоимость обработки: ≈164,00 ₽" {
 		t.Fatal(got)
 	}
 	for _, u := range []Usage{{}, {Input: 1, Cached: 2, Total: 1}, {Input: -1, Total: 1}} {

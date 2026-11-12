@@ -150,6 +150,7 @@ func (r Run) Terminal() bool {
 }
 
 type Session struct {
+	Profile string
 	// LocalFiles identifies the connector's pinned local export hook in the
 	// immutable session configuration, including inputs accepted before the flag.
 	LocalFiles        bool

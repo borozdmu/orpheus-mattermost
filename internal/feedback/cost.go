@@ -78,5 +78,5 @@ func Format(model string, u Usage, created time.Time, b Basis) string {
 	if rub > 0 && rub < 0.01 {
 		amount = "<0,01"
 	}
-	return fmt.Sprintf("Стоимость обработки: ≈%s ₽ (модель, курс ЦБ на %s).", amount, date)
+	return "Стоимость обработки: ≈" + amount + " ₽"
 }
