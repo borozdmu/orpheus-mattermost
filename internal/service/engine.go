@@ -22,6 +22,7 @@ import (
 	"github.com/orpheus-agents/orpheus-mattermost/internal/orpheus"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/transcription"
 	api "github.com/orpheus-agents/orpheus/client"
+	"github.com/orpheus-agents/orpheus/client/modelcommand"
 )
 
 type API interface {
@@ -708,7 +709,7 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 	}
 	// The complete linked index is bounded by the transport budget; payload is
 	// frozen before the first POST, including the renderer and workflow revision.
-	if initial && latest != nil && orpheus.InModelFamily(w.Profile, latest.Profile) {
+	if initial && latest != nil && modelcommand.InFamily(w.Profile, latest.Profile) {
 		w.Profile = latest.Profile
 	} else if initial && latest == nil {
 		if store, ok := e.MM.(chatModels); ok {

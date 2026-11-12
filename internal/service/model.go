@@ -10,8 +10,8 @@ import (
 	"github.com/orpheus-agents/orpheus-mattermost/internal/config"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/delivery"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/mattermost"
-	"github.com/orpheus-agents/orpheus-mattermost/internal/orpheus"
 	api "github.com/orpheus-agents/orpheus/client"
+	"github.com/orpheus-agents/orpheus/client/modelcommand"
 )
 
 type chatModels interface {
@@ -40,7 +40,7 @@ func selectedChatModel(settings map[string]mattermost.ModelSetting, base string,
 	latest := int64(0)
 	latestID, profile := "", base
 	for id, s := range settings {
-		if s.Base != base || !orpheus.InModelFamily(base, s.Profile) || s.At > before || (s.At == before && id >= anchor) {
+		if s.Base != base || !modelcommand.InFamily(base, s.Profile) || s.At > before || (s.At == before && id >= anchor) {
 			continue
 		}
 		if s.At > latest || (s.At == latest && id > latestID) {
@@ -83,7 +83,7 @@ func (e *Engine) modelReply(ctx context.Context, store chatModels, w config.Work
 		return "Не удалось получить каталог моделей. Повторите команду позже.", nil //nolint:nilerr // Report the catalog outage as a service reply.
 	}
 	current := selectedChatModel(settings, w.Profile, post.CreateAt, post.ID)
-	profile, reply := orpheus.SelectModel(items, w.Profile, current, args)
+	profile, reply := modelcommand.Select(items, w.Profile, current, args)
 	if profile != "" {
 		err = store.SaveModelSetting(ctx, e.Bot.ID, channel.ID, post.ID, mattermost.ModelSetting{Profile: profile, Base: w.Profile, At: post.CreateAt, Reply: reply})
 	}
