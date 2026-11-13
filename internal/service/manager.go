@@ -78,14 +78,14 @@ func (m *Manager) Init(ctx context.Context) error {
 }
 func (m *Manager) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("POST /internal/audience/confirm", agentcontract.Handler(func() string { return os.Getenv("ORPHEUS_AUDIENCE_SECRET") }, func(ctx context.Context, a agentcontract.Assignment) error {
+	mux.Handle("POST /internal/audience/confirm", withDirectoryProbe(agentcontract.Handler(func() string { return os.Getenv("ORPHEUS_AUDIENCE_SECRET") }, func(ctx context.Context, a agentcontract.Assignment) error {
 		for _, c := range m.connections {
 			if c.runtime.Engine.SourceID == a.Delivery.Source {
 				return c.runtime.Engine.confirmCorporate(ctx, a)
 			}
 		}
 		return errors.New("unknown connector")
-	}))
+	})))
 	health := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
 	ready := func(w http.ResponseWriter, _ *http.Request) {
 		for _, c := range m.connections {

@@ -141,7 +141,7 @@ func candidate(p mattermost.Post, ch mattermost.Channel, w config.Workflow, bot 
 }
 func (r *Runtime) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("POST /internal/audience/confirm", r.Engine.corporateHandler())
+	mux.Handle("POST /internal/audience/confirm", withDirectoryProbe(r.Engine.corporateHandler()))
 	health := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /healthz", health)
