@@ -271,7 +271,10 @@ It receives the observed account IDs and types, the destination and a timestamp.
 The connector checks the matching request ID, purpose and observation digest.
 Each submission and each new reply fragment requires a fresh decision.
 
-Only the initiating text enters a fresh session. Ordinary mode has no
+Only the initiating text enters a fresh session. A mention with an attachment
+or above the input size limit gets a fixed rejection notice instead. The notice
+needs the same fresh agent-use decision and consumes the mention, so later
+mentions in the thread proceed. Ordinary mode has no
 attachments, previous workspace, business services, provider context, action
 credentials or access to transport secrets. A workflow declaration does not
 prove that its model profile or sandbox image is clean. Verify their effective
