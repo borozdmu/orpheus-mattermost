@@ -95,6 +95,34 @@ func (e *Engine) observeOrdinary(ctx context.Context, w config.Workflow, key con
 	return ordinaryObservation{Complete: true, Destination: ch.ID, ObservedAt: start.Unix(), Recipients: recipients, Source: key.Source}, nil
 }
 
+// An output can answer several mentions. Recover every original author from
+// the exact source posts, so revoking one author cannot release a batch reply.
+func replyAuthors(w config.Workflow, env conversation.Envelope, posts []mattermost.Post) ([]string, error) {
+	actor := env.AccessContext.Subject.ID
+	if !w.OrdinaryUse() {
+		return []string{actor}, nil
+	}
+	seen := map[string]bool{}
+	var authors []string
+	for _, p := range posts {
+		if !slices.Contains(env.TriggerIDs, p.ID) {
+			continue
+		}
+		if seen[p.ID] || p.ChannelID != env.Channel || p.Root() != env.Root || p.DeleteAt != 0 || !config.ValidID(p.UserID) ||
+			p.Props["from_webhook"] != nil || !slices.Contains(env.Versions, conversation.PostVersion(p)) || p.ID == env.Anchor && p.UserID != actor {
+			return nil, errWithholdOutput
+		}
+		seen[p.ID] = true
+		if !slices.Contains(authors, p.UserID) {
+			authors = append(authors, p.UserID)
+		}
+	}
+	if len(seen) != len(env.TriggerIDs) || !seen[env.Anchor] {
+		return nil, errWithholdOutput
+	}
+	return authors, nil
+}
+
 func (e *Engine) workflowGate(ctx context.Context, w config.Workflow, env conversation.Envelope, audience, authors []string) error {
 	if !w.OrdinaryUse() {
 		return localGate(ctx, w, env, audience, authors)

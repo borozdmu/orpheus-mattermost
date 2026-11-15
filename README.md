@@ -256,7 +256,8 @@ fails closed unless unrestricted membership visibility is proven.
 A resource-free workflow can set `access_context.ordinary_agent_use: true`,
 `channel_only: true`, an identity namespace and its own bot ID. Give it a
 distinct workflow ID, an audited role profile, a clean sandbox template and the
-approved role instructions. Disable link expansion and commentary. Leave its
+approved role instructions. Leave the workflow body empty when the role instructions
+are registered in the Orpheus profile. Disable link expansion and commentary. Leave its
 room lists, identity projection, external services, environment and memory
 empty. Explicit existing workflows retain their state and routing priority.
 

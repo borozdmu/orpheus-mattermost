@@ -384,6 +384,10 @@ func (c *Client) Submit(ctx context.Context, w config.Workflow, e conversation.E
 			}
 		}
 		if w.OrdinaryUse() {
+			// Omitting instructions preserves the authority-owned role configured in the profile.
+			if w.Instructions == "" {
+				conf.Agent.Instructions = nil
+			}
 			conf.Sandbox.Services = new([]string{})
 			conf.Sandbox.EnvFrom = new([]string{})
 			conf.Sandbox.Env = new(map[string]string{})

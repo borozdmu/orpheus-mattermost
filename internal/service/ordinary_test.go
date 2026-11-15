@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/orpheus-agents/orpheus-mattermost/internal/config"
+	"github.com/orpheus-agents/orpheus-mattermost/internal/conversation"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/mattermost"
+	api "github.com/orpheus-agents/orpheus/client"
 )
 
 type ordinaryTestMM struct {
@@ -130,5 +132,28 @@ func TestOrdinaryAdmissionBindsPurposeAudienceDestinationAndRevocation(t *testin
 				t.Fatal("cached grant or expired observation accepted")
 			}
 		})
+	}
+}
+
+func TestOrdinaryReplyRechecksEveryOriginalBatchAuthor(t *testing.T) {
+	_, _, m, _, k, w := protectedFixture(t)
+	w.Access.OrdinaryAgentUse = true
+	p1 := m.posts[0]
+	p2 := p1
+	p2.ID = strings.Repeat("z", 26)
+	p2.RootID = k.Root
+	p2.UserID = strings.Repeat("v", 26)
+	env := conversation.Envelope{Root: k.Root, Channel: k.Channel, Anchor: p1.ID, TriggerIDs: []string{p1.ID, p2.ID}, Versions: []conversation.Version{conversation.PostVersion(p1), conversation.PostVersion(p2)}, AccessContext: &api.AccessContext{Subject: api.AccessSubject{ID: p1.UserID}}}
+	posts := []mattermost.Post{p1, p2}
+	all, err := replyAuthors(w, env, posts)
+	if err != nil || !slices.Equal(all, []string{p1.UserID, p2.UserID}) {
+		t.Fatal("lost batch author", err)
+	}
+	posts[1].Message += " changed"
+	if _, err = replyAuthors(w, env, posts); !errors.Is(err, errWithholdOutput) {
+		t.Fatal("changed source allowed")
+	}
+	if _, err = replyAuthors(w, env, posts[:1]); !errors.Is(err, errWithholdOutput) {
+		t.Fatal("missing source allowed")
 	}
 }

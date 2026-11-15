@@ -192,7 +192,7 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 	if err != nil {
 		return err
 	}
-	if w.OrdinaryUse() && (env.Key() != p.Key || env.Revision != w.EffectiveRevision || s.AllowMultipleRuns || env.LocalFiles || s.LocalFiles || len(r.Hooks) != 0) {
+	if w.OrdinaryUse() && (env.Key() != p.Key || s.AllowMultipleRuns || env.LocalFiles || s.LocalFiles || len(r.Hooks) != 0) {
 		return errors.New("ordinary output does not belong to the isolated text session")
 	}
 	if w.Access != nil {
@@ -207,7 +207,12 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 					return
 				}
 				actor := env.AccessContext.Subject.ID
-				result = e.accessNotice(ctx, w, p, env, actor, []string{actor}, result, r.ID)
+				authors, err := replyAuthors(w, env, p.Posts)
+				if err != nil {
+					result = err
+					return
+				}
+				result = e.accessNotice(ctx, w, p, env, actor, authors, result, r.ID)
 			}
 		}()
 		p.BeforeCreate = func(ctx context.Context) error {
@@ -232,7 +237,11 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 					return errWithholdOutput
 				}
 			}
-			return e.workflowGate(ctx, w, env, audience, []string{env.AccessContext.Subject.ID})
+			authors, err := replyAuthors(w, env, p.Posts)
+			if err != nil {
+				return err
+			}
+			return e.workflowGate(ctx, w, env, audience, authors)
 		}
 		defer func() { p.BeforeCreate = nil }()
 	}
