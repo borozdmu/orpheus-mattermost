@@ -313,6 +313,9 @@ func (c *Client) Submit(ctx context.Context, w config.Workflow, e conversation.E
 	if len(messages) == 0 {
 		return conversation.Accepted{}, errors.New("empty Mattermost input batch")
 	}
+	if w.OrdinaryUse() && (sessionID != "" || runID != "" || len(e.Request.Files) != 0) {
+		return conversation.Accepted{}, errors.New("ordinary input requires an independent text-only session")
+	}
 	input := make([]api.TextMessage, len(messages))
 	for i, message := range messages {
 		input[i] = api.TextMessage{Text: message.Text}
@@ -379,6 +382,11 @@ func (c *Client) Submit(ctx context.Context, w config.Workflow, e conversation.E
 					conf.Hooks.AfterRun = new(sandbox.LocalAfterRun())
 				}
 			}
+		}
+		if w.OrdinaryUse() {
+			conf.Sandbox.Services = new([]string{})
+			conf.Sandbox.EnvFrom = new([]string{})
+			conf.Sandbox.Env = new(map[string]string{})
 		}
 		if len(w.EnvFrom) > 0 {
 			conf.Sandbox.EnvFrom = &w.EnvFrom

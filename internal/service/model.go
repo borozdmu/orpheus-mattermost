@@ -105,7 +105,7 @@ func (e *Engine) modelCommands(ctx context.Context, w config.Workflow, ch matter
 			continue
 		}
 		commands = append(commands, post.ID)
-		if handled[post.ID] || post.CreateAt < w.Since.UnixMilli() {
+		if w.OrdinaryUse() || handled[post.ID] || post.CreateAt < w.Since.UnixMilli() {
 			continue
 		}
 		store, ok := e.MM.(chatModels)

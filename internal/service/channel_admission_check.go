@@ -19,7 +19,7 @@ func ChannelAdmissionBindings(cfg config.Config) (map[string]string, error) {
 	}
 	routes := map[string]string{}
 	for _, w := range cfg.StateWorkflows() {
-		if !w.Access.LocalPolicy() {
+		if !w.Access.LocalPolicy() || w.OrdinaryUse() {
 			continue
 		}
 		if len(w.IncludeIDs) != 1 || !config.ValidID(w.IncludeIDs[0]) || routes[w.ID] != "" {

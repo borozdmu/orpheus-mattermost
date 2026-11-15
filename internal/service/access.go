@@ -39,7 +39,7 @@ func projectAccess(binding config.Access, audience []string, actor string) (api.
 			continue
 		}
 		allowed = append(allowed, api.AccessSubject{Namespace: binding.Namespace, ID: id})
-		if id == binding.BotID {
+		if id == binding.BotID || binding.OrdinaryAgentUse {
 			continue
 		}
 		mapped, ok := binding.IdentityProjection.Subjects[id]
@@ -55,6 +55,9 @@ func projectAccess(binding config.Access, audience []string, actor string) (api.
 	}
 	if !seen[actor] || !seen[binding.BotID] {
 		return nil, nil, errors.New("protected actor or bot outside audience")
+	}
+	if binding.OrdinaryAgentUse {
+		return api.AccessScopeContext{}, allowed, nil
 	}
 	if peer := binding.Peer; peer != nil && (actor == peer.ID || !seen[peer.ID]) {
 		return nil, nil, errors.New("protected peer or actor mismatch")
@@ -146,6 +149,13 @@ func (e *Engine) confirmAudience(ctx context.Context, w config.Workflow, key con
 
 // readAudience optionally retains public usernames from the same verified membership scan.
 func (e *Engine) readAudience(ctx context.Context, w config.Workflow, key conversation.Key, usernames map[string]string) ([]string, time.Time, error) {
+	if w.OrdinaryUse() {
+		o, err := e.observeOrdinary(ctx, w, key)
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		return o.ids(), time.Unix(o.ObservedAt, 0).UTC(), nil
+	}
 	observed := time.Now().UTC()
 	ch, err := e.MM.Channel(ctx, key.Channel)
 	if err != nil {
@@ -283,5 +293,8 @@ func (e *Engine) describeAudience(ctx context.Context, w config.Workflow, key co
 }
 
 func protectedChannelType(w config.Workflow, kind string) bool {
+	if w.OrdinaryUse() {
+		return kind == "P" && w.PrivateChannels || kind == "D" && w.DirectMessages || kind == "G" && w.GroupMessages || kind == "O" && w.PublicTeamAudience
+	}
 	return kind == "P" || w.AgentID != "" && (kind == "D" || kind == "O" && w.PublicTeamAudience)
 }

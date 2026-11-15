@@ -250,3 +250,31 @@ The directory credential stays with the receiver.
 For shared Box roles, the common assignment and complete current-reader checks,
 see [corporate bindings](docs/CORPORATE.md). Public-team access is explicit and
 fails closed unless unrestricted membership visibility is proven.
+
+### Ordinary text conversations
+
+A resource-free workflow can set `access_context.ordinary_agent_use: true`,
+`channel_only: true`, an identity namespace and its own bot ID. Give it a
+distinct workflow ID, an audited role profile, a clean sandbox template and the
+approved role instructions. Disable link expansion and commentary. Leave its
+room lists, identity projection, external services, environment and memory
+empty. Explicit existing workflows retain their state and routing priority.
+
+The connector observes the destination and full current audience via Mattermost.
+For a public channel, enable `public_team_audience` only where the receiver can
+validate the complete team roster. Private channels, DMs and group DMs require
+two matching complete channel membership scans. In every case the channel must
+confirm that it is local and active. The shared authorization service decides
+whether the human author and this audience can use this specific agent.
+It receives the observed account IDs and types, the destination and a timestamp.
+The connector checks the matching request ID, purpose and observation digest.
+Each submission and each new reply fragment requires a fresh decision.
+
+Only the initiating text enters a fresh session. Ordinary mode has no
+attachments, previous workspace, business services, provider context, action
+credentials or access to transport secrets. A workflow declaration does not
+prove that its model profile or sandbox image is clean. Verify their effective
+configuration and image before enabling the workflow. A deployment also needs
+its own provider registration and explicit agent-use entitlements. This mode
+does not authorize disclosures from protected sources or actions on behalf of
+the author.

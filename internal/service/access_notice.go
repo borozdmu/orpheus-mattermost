@@ -73,7 +73,7 @@ func denialText(d *audienceDenial, usernames map[string]string, service string) 
 // the channel and the decision immediately before each newly created post, including retries.
 func (e *Engine) accessNotice(ctx context.Context, w config.Workflow, p *delivery.Publisher, env conversation.Envelope, actor string, authors []string, failure error, outputRun string) error {
 	denied, ok := errors.AsType[*audienceDenial](failure)
-	if !ok {
+	if !ok || w.OrdinaryUse() && denied.code != "channel_policy_denied" {
 		return failure
 	}
 	if !e.noticeDue(w, p, env) {
@@ -95,7 +95,7 @@ func (e *Engine) accessNotice(ctx context.Context, w config.Workflow, p *deliver
 		}
 		_, _, decision := projectAccess(*w.Access, aud, actor)
 		if decision == nil && w.Access.LocalPolicy() {
-			decision = localGate(ctx, w, env, aud, authors)
+			decision = e.workflowGate(ctx, w, env, aud, authors)
 		}
 		// A definitive core refusal has no person-level details. Checking it by
 		// submitting the request again could start a run, so only recheck the local audience.
