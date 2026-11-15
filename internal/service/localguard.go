@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"slices"
 	"time"
 
@@ -20,7 +21,19 @@ func localGate(ctx context.Context, w config.Workflow, env conversation.Envelope
 	if !w.Access.LocalPolicy() {
 		return nil
 	}
-	b, err := json.Marshal(map[string]any{"workflow": w.ID, "channel": env.Channel, "bot": w.Access.BotID, "audience": audience, "authors": authors})
+	params := channelRequest{Workflow: w.ID, Channel: env.Channel, Bot: w.Access.BotID, Audience: audience, Authors: authors}
+	mode, configured := os.LookupEnv(directAdmissionMode)
+	if configured {
+		if mode != "data" {
+			return unavailable()
+		}
+		c, ok := readChannelCredentials()
+		if !ok {
+			return unavailable()
+		}
+		return directGate(ctx, params, w.Access, c, channelHTTP)
+	}
+	b, err := json.Marshal(params)
 	if err != nil {
 		return err
 	}
