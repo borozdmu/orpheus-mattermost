@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## Общий вход
+
+Перед работой прочитай папку `knowledge/` в репозитории `ai-agents-releases-ci`: https://github.com/borozdmu/ai-agents-releases-ci/tree/main/knowledge (если он склонирован рядом, это `../ai-agents-releases-ci/knowledge/`). Начни с `README.md`. Если то, что ты видишь в коде или на сервере, расходится с ней, не решай сам: предложи правку в `open.md` через PR.
+
 ## Task branches and shared CI
 
 1. Before starting or resuming a task, check the repository (`git remote -v`), local changes (`git status -sb`), and worktrees (`git worktree list`). Run `git fetch --prune origin` against the team's fork. If the fetch fails, restore access to the current `origin/main` before proceeding.
