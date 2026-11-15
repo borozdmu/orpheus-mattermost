@@ -574,3 +574,45 @@ func TestLocalProviderSubmitPreservesVerifiedContextAndLocalHooks(t *testing.T) 
 		})
 	}
 }
+
+func TestOrdinarySubmitOnlyCreatesFreshSessionWithExplicitEmptyServices(t *testing.T) {
+	calls := 0
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var body api.CreateSession
+		if json.NewDecoder(r.Body).Decode(&body) != nil {
+			t.Error("bad request")
+		}
+		c := body.Configuration
+		if c.Agent.Profile != "counsel-ordinary" || calls == 1 && (c.Agent.Instructions == nil || *c.Agent.Instructions != "verified role instructions") || calls == 2 && c.Agent.Instructions != nil ||
+			c.Sandbox.Template != "clean-template" || c.Sandbox.Env == nil || len(*c.Sandbox.Env) != 0 || c.Sandbox.EnvFrom == nil || len(*c.Sandbox.EnvFrom) != 0 ||
+			c.Sandbox.Services == nil || len(*c.Sandbox.Services) != 0 || c.Hooks != nil || body.AccessContext != nil || body.AllowMultipleRuns == nil || *body.AllowMultipleRuns ||
+			body.Env == nil || len(*body.Env) != 0 || body.EnvFrom == nil || len(*body.EnvFrom) != 0 {
+			t.Error("ordinary session inherited resources or lost its role")
+		}
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]string{"session_id": uuid.NewString(), "run_id": uuid.NewString(), "message_id": uuid.NewString()})
+	}))
+	defer s.Close()
+	c, err := New(config.Config{Orpheus: config.Endpoint{BaseURL: s.URL}, MaxRequestBytes: 1 << 20}, "synthetic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := config.Workflow{Profile: "counsel-ordinary", SandboxTemplate: "clean-template", Instructions: "verified role instructions", Access: &config.Access{ChannelOnly: true, OrdinaryAgentUse: true}}
+	input := []conversation.InputMessage{{Text: "synthetic question"}}
+	e := conversation.Envelope{Anchor: "synthetic", AccessContext: &api.AccessContext{}}
+	if _, err = c.Submit(t.Context(), w, e, input, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	w.Instructions = ""
+	if _, err = c.Submit(t.Context(), w, e, input, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.Submit(t.Context(), w, e, input, uuid.NewString(), "", ""); err == nil {
+		t.Fatal("old workspace reused")
+	}
+	e.Request.Files = []attachments.InputFile{{FileID: "fake"}}
+	if _, err = c.Submit(t.Context(), w, e, input, "", "", ""); err == nil || calls != 2 {
+		t.Fatal("file or reused workspace was submitted")
+	}
+}

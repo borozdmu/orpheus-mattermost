@@ -111,30 +111,8 @@ var channelHTTP = unixAdmissionClient(admissionSocket)
 
 func directGate(ctx context.Context, params channelRequest, access *config.Access, c channelCredentials, client *http.Client) error {
 	id := uuid.NewString()
-	body, err := json.Marshal(map[string]any{"method": "channel.admit", "params": params, "request_id": id})
-	if err != nil || len(body) > 8192 {
-		return unavailable()
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://local/internal/v1/call", bytes.NewReader(body))
-	if err != nil {
-		return unavailable()
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Content-Type", "application/json")
 	trace, _ := ctx.Value(directoryProbeKey{}).(string)
-	if trace != "" {
-		req.Header.Set(directoryProbeHeader, trace)
-		directoryEvent(trace, id, "rpc", "")
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return unavailable()
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Encoding") != "" || strings.TrimSpace(strings.SplitN(resp.Header.Get("Content-Type"), ";", 2)[0]) != "application/json" {
-		return unavailable()
-	}
-	raw, ok := bounded(resp.Body, 8192)
+	raw, ok := callAdmission(ctx, client, c, id, "channel.admit", params, 8192, trace)
 	if !ok {
 		return unavailable()
 	}
@@ -145,6 +123,38 @@ func directGate(ctx context.Context, params channelRequest, access *config.Acces
 		directoryEvent(trace, id, "decision", "deny")
 	}
 	return result
+}
+
+func callAdmission(ctx context.Context, client *http.Client, c channelCredentials, id, method string, params any, limit int, trace string) ([]byte, bool) {
+
+	body, err := json.Marshal(map[string]any{"method": method, "params": params, "request_id": id})
+	if err != nil || len(body) > limit {
+		return nil, false
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://local/internal/v1/call", bytes.NewReader(body))
+	if err != nil {
+		return nil, false
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	if trace != "" {
+		req.Header.Set(directoryProbeHeader, trace)
+		directoryEvent(trace, id, "rpc", "")
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Encoding") != "" || strings.TrimSpace(strings.SplitN(resp.Header.Get("Content-Type"), ";", 2)[0]) != "application/json" {
+		return nil, false
+	}
+	raw, ok := bounded(resp.Body, 8192)
+	if !ok {
+		return nil, false
+	}
+	return raw, true
 }
 
 func channelDecision(raw []byte, id, pin string, access *config.Access) error {

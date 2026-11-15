@@ -14,6 +14,7 @@ import (
 // Access maps confirmed source identities into an integration's service context.
 // The provider owns the meaning of fields and mapped identities.
 type Access struct {
+	OrdinaryAgentUse     bool               `yaml:"ordinary_agent_use,omitempty" json:"ordinary_agent_use,omitempty"`
 	VerifyAccountCards   bool               `yaml:"verify_account_cards,omitempty" json:"verify_account_cards,omitempty"`
 	LocalProviderContext bool               `yaml:"local_provider_context,omitempty" json:"local_provider_context,omitempty"`
 	LocalFiles           bool               `yaml:"local_files,omitempty" json:"local_files,omitempty"`
@@ -95,6 +96,14 @@ func (id *SubjectID) UnmarshalYAML(node *yaml.Node) error {
 }
 
 func (a Access) Validate() error {
+	if a.OrdinaryAgentUse {
+		if !a.ChannelOnly || !accessNamePattern.MatchString(a.Namespace) || !ValidID(a.BotID) ||
+			a.Peer != nil || a.LocalFiles || a.LocalServices || a.LocalProviderContext || a.VerifyAccountCards ||
+			len(a.ScopeContext) != 0 || a.IdentityProjection.ActorField != "" || a.IdentityProjection.AudienceField != "" || len(a.IdentityProjection.Subjects) != 0 {
+			return errors.New("ordinary agent use requires only an isolated transport namespace and its own bot")
+		}
+		return nil
+	}
 	if a.LocalProviderContext {
 		space, ok := a.ScopeContext["policy_space_id"].(string)
 		if !a.LocalServices || a.ChannelOnly || a.Peer == nil || !ok || !strings.HasSuffix(space, "."+a.Peer.ID) {

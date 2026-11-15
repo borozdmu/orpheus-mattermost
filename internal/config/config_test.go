@@ -355,3 +355,46 @@ func TestAccessNoticeRolloutSettings(t *testing.T) {
 		t.Fatal("unsafe display label accepted")
 	}
 }
+
+func TestOrdinaryUseRoutesVerifiedKindsAndPreservesSpecificOwner(t *testing.T) {
+	c, err := example(t, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := c.Workflows[0]
+	w.Access = &Access{OrdinaryAgentUse: true, ChannelOnly: true, Namespace: "test", BotID: strings.Repeat("b", 26)}
+	w.Links.Enabled = new(false)
+	w.SendCommentary = new(false)
+	w.PrivateChannels, w.GroupMessages, w.DirectMessages, w.PublicTeamAudience = true, true, true, true
+	w.Services = nil
+	w.EnvFrom = nil
+	c.Workflows = []Workflow{w}
+	if err := c.validate(); err != nil {
+		t.Fatal(err)
+	}
+	room := strings.Repeat("r", 26)
+	for _, kind := range []string{"G", "D", "P", "O"} {
+		selected, err := c.Route(room, kind)
+		if err != nil || selected == nil || !selected.OrdinaryUse() {
+			t.Fatalf("generic route rejected %s", kind)
+		}
+	}
+	for _, edit := range []func(*Workflow){func(w *Workflow) { w.Services = []string{"secret"} }, func(w *Workflow) { w.Memory = true }, func(w *Workflow) { w.IncludeIDs = []string{room} }, func(w *Workflow) { w.EnvFrom = []string{"TOKEN"} }, func(w *Workflow) { w.Links.Enabled = new(true) }} {
+		bad := c
+		bad.Workflows = slices.Clone(c.Workflows)
+		edit(&bad.Workflows[0])
+		if bad.validate() == nil {
+			t.Fatal("privileged ordinary workflow accepted")
+		}
+	}
+	legacy := w
+	legacy.Access = nil
+	legacy.ID = "existing"
+	legacy.IncludeIDs = []string{room}
+	legacy.DirectMessages = false
+	c.Workflows = append(c.Workflows, legacy)
+	selected, err := c.Route(room, "P")
+	if err != nil || selected == nil || selected.ID != legacy.ID {
+		t.Fatal("existing protected route was replaced")
+	}
+}

@@ -55,6 +55,9 @@ func projectLocalInput(ctx context.Context, p *pending, mm MM) error {
 		if err != nil || post.DeleteAt != 0 || post.Root() != p.Envelope.Root || post.ChannelID != p.Envelope.Channel || post.UserID != item.Subject.ID || !slices.Contains(p.Envelope.Versions, conversation.PostVersion(post)) || !slices.Contains(p.Envelope.TriggerIDs, post.ID) {
 			return errors.New("current input changed or crosses channel boundary")
 		}
+		if p.Workflow.OrdinaryUse() && len(post.FileIDs) != 0 {
+			return errors.New("ordinary conversation accepts text only")
+		}
 		var body strings.Builder
 		if post.Message != "" {
 			s, err := transform("text/plain", []byte(post.Message))

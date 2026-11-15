@@ -192,6 +192,9 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 	if err != nil {
 		return err
 	}
+	if w.OrdinaryUse() && (env.Key() != p.Key || s.AllowMultipleRuns || env.LocalFiles || s.LocalFiles || len(r.Hooks) != 0) {
+		return errors.New("ordinary output does not belong to the isolated text session")
+	}
 	if w.Access != nil {
 		defer func() {
 			if errors.Is(result, errWithholdOutput) {
@@ -204,7 +207,12 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 					return
 				}
 				actor := env.AccessContext.Subject.ID
-				result = e.accessNotice(ctx, w, p, env, actor, []string{actor}, result, r.ID)
+				authors, err := replyAuthors(w, env, p.Posts)
+				if err != nil {
+					result = err
+					return
+				}
+				result = e.accessNotice(ctx, w, p, env, actor, authors, result, r.ID)
 			}
 		}()
 		p.BeforeCreate = func(ctx context.Context) error {
@@ -221,12 +229,19 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 			if _, _, err = projectAccess(*w.Access, audience, env.AccessContext.Subject.ID); err != nil {
 				return err
 			}
+			if w.OrdinaryUse() && !slices.Equal(audience, env.AccessProof.AudienceSubjects) {
+				return errWithholdOutput
+			}
 			for _, id := range audience {
 				if !slices.Contains(env.AccessProof.AudienceSubjects, id) {
 					return errWithholdOutput
 				}
 			}
-			return localGate(ctx, w, env, audience, []string{env.AccessContext.Subject.ID})
+			authors, err := replyAuthors(w, env, p.Posts)
+			if err != nil {
+				return err
+			}
+			return e.workflowGate(ctx, w, env, audience, authors)
 		}
 		defer func() { p.BeforeCreate = nil }()
 	}
@@ -282,7 +297,7 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 			output.Files = nil
 		}
 	}
-	enabled := feedback.Enabled(r.CreatedAt)
+	enabled := !w.OrdinaryUse() && feedback.Enabled(r.CreatedAt)
 	if enabled && !r.Terminal() {
 		temporary = true
 		if err = send("feedback_started", "⏳ Принял сообщение. Начинаю обработку.", nil); err != nil {
@@ -504,7 +519,7 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 			return err
 		}
 	}
-	if run != nil {
+	if run != nil && !w.OrdinaryUse() {
 		_ = e.MM.Typing(ctx, key.Channel, key.Root)
 	}
 	if w.Draining {
@@ -553,8 +568,8 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 	if len(snapshot.Sessions) > 0 {
 		latest = &snapshot.Sessions[len(snapshot.Sessions)-1]
 	}
-	initial := latest == nil || !latest.Reusable(w.EffectiveRevision)
-	if run != nil && w.AgentID != "" {
+	initial := w.OrdinaryUse() || latest == nil || !latest.Reusable(w.EffectiveRevision)
+	if run != nil && (w.AgentID != "" || w.OrdinaryUse()) {
 		return nil
 	}
 	if run != nil {
@@ -643,6 +658,9 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 		return buildErr
 	}
 	if buildErr != nil {
+		if w.OrdinaryUse() {
+			return buildErr
+		}
 		return e.reject(ctx, p, env, messages, "Message exceeds the input size limit. Split the request.")
 	}
 	if run != nil && w.Access != nil && w.Access.LocalPolicy() {
@@ -709,9 +727,9 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 	}
 	// The complete linked index is bounded by the transport budget; payload is
 	// frozen before the first POST, including the renderer and workflow revision.
-	if initial && latest != nil && modelcommand.InFamily(w.Profile, latest.Profile) {
+	if !w.OrdinaryUse() && initial && latest != nil && modelcommand.InFamily(w.Profile, latest.Profile) {
 		w.Profile = latest.Profile
-	} else if initial && latest == nil {
+	} else if !w.OrdinaryUse() && initial && latest == nil {
 		if store, ok := e.MM.(chatModels); ok {
 			for _, post := range p.Posts {
 				if post.ID != key.Root {
@@ -808,7 +826,7 @@ func (e *Engine) submit(ctx context.Context, key conversation.Key, p pending, cu
 		actor, authors := triggerAuthors(p)
 		_, _, err = projectAccess(*a, audience, actor)
 		if err == nil {
-			err = localGate(ctx, p.Workflow, p.Envelope, audience, authors)
+			err = e.workflowGate(ctx, p.Workflow, p.Envelope, audience, authors)
 		}
 		if err != nil {
 			if _, ok := errors.AsType[*audienceDenial](err); !ok {
@@ -825,6 +843,12 @@ func (e *Engine) submit(ctx context.Context, key conversation.Key, p pending, cu
 		}
 		if err := projectLocalInput(ctx, &p, e.MM); err != nil {
 			return err
+		}
+		if p.Workflow.OrdinaryUse() {
+			// The masking processor can take longer than an observation remains valid.
+			if err := e.workflowGate(ctx, p.Workflow, p.Envelope, audience, authors); err != nil {
+				return err
+			}
 		}
 	}
 	if p.Workflow.TranscribeVoice && !p.VoicePrepared {
@@ -878,6 +902,9 @@ func (e *Engine) submit(ctx context.Context, key conversation.Key, p pending, cu
 		}
 		e.set(key, clean)
 		return e.submit(ctx, key, clean, nil, nil)
+	}
+	if p.Workflow.OrdinaryUse() && err != nil {
+		return err
 	}
 	switch code := orpheus.Code(err); code {
 	case "service_access_denied", "service_credentials_conflict", "invocation_already_accepted", "access_context_required", "input_subject_denied", "invalid_service_scope", "request_too_large", "environment_too_large", "validation_error", "unknown_profile", "unknown_template", "unknown_service":

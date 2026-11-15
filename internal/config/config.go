@@ -98,6 +98,9 @@ type Workflow struct {
 	Since                 time.Time `yaml:"-"`
 	EffectiveRevision     string    `yaml:"-"`
 }
+
+func (w Workflow) OrdinaryUse() bool { return w.Access != nil && w.Access.OrdinaryAgentUse }
+
 type Config struct {
 	Transcription                  Transcription
 	KeepUnroutedPrivateMemberships bool
@@ -408,13 +411,20 @@ func (c *Config) validate() error {
 			if err := a.Validate(); err != nil {
 				return err
 			}
-			if a.ChannelOnly && (a.Peer == nil || len(w.Services) != 0 || len(w.EnvFrom) != 0 || len(w.TriggerBotIDs) != 0) {
+			if a.OrdinaryAgentUse {
+				if len(w.IncludeIDs)+len(w.ExcludeIDs)+len(w.TriggerBotIDs)+len(w.Services)+len(w.EnvFrom)+len(w.Modes)+len(w.MemorySharedServices) != 0 ||
+					w.Memory || w.MemorySharedRevision != "" || w.AgentID != "" || len(w.ChatAccess) != 0 || w.LocalBeforeRunPython != "" ||
+					w.AdmissionCheckpoint != nil || w.TranscribeVoice || *w.SendCommentary || !*w.StartOnMention || *w.Links.Enabled {
+					return errors.New("ordinary conversation requires an isolated text-only workflow without fixed audiences, services or memory")
+				}
+			}
+			if a.ChannelOnly && (!a.OrdinaryAgentUse && a.Peer == nil || len(w.Services) != 0 || len(w.EnvFrom) != 0 || len(w.TriggerBotIDs) != 0) {
 				return errors.New("channel-only workflows require a fixed peer and no services, harness secrets or bot triggers")
 			}
 			if a.LocalServices && (a.ChannelOnly || a.Peer == nil || len(w.Services) == 0 || len(w.EnvFrom) != 0 || len(w.TriggerBotIDs) != 0) {
 				return errors.New("local-service workflows require a fixed peer and selected services, without channel-only mode, harness secrets or bot triggers")
 			}
-			if (!a.ChannelOnly && len(w.Services) == 0) || len(w.IncludeIDs) == 0 || (!w.PrivateChannels && !w.PublicTeamAudience) || w.DirectMessages && w.AgentID == "" || w.GroupMessages || !*w.StartOnMention || *w.Links.Enabled {
+			if !a.OrdinaryAgentUse && ((!a.ChannelOnly && len(w.Services) == 0) || len(w.IncludeIDs) == 0 || (!w.PrivateChannels && !w.PublicTeamAudience) || w.DirectMessages && w.AgentID == "" || w.GroupMessages || !*w.StartOnMention || *w.Links.Enabled) {
 				return errors.New("protected workflows require services, explicit private channels, mentions and disabled link expansion")
 			}
 		}
@@ -489,10 +499,10 @@ func (c Config) Route(channelID, kind string) (*Workflow, error) {
 			w = &resolved
 		}
 		allowed := kind == "O" || kind == "P" && w.PrivateChannels || kind == "G" && w.GroupMessages || kind == "D" && w.DirectMessages
-		if !allowed {
+		if !allowed || w.OrdinaryUse() && kind == "O" && !w.PublicTeamAudience {
 			continue
 		}
-		if (kind != "D" || w.AgentID != "") && (slices.Contains(w.ExcludeIDs, channelID) || len(w.IncludeIDs) > 0 && !slices.Contains(w.IncludeIDs, channelID) || len(w.IncludeIDs) == 0 && specialized) {
+		if (kind != "D" || w.AgentID != "" || w.OrdinaryUse()) && (slices.Contains(w.ExcludeIDs, channelID) || len(w.IncludeIDs) > 0 && !slices.Contains(w.IncludeIDs, channelID) || len(w.IncludeIDs) == 0 && specialized) {
 			continue
 		}
 		if selected != nil {
