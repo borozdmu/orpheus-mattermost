@@ -29,9 +29,10 @@ func main() {
 }
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: orpheus-mattermost serve|validate|healthcheck|export-checkpoint")
+		return errors.New("usage: orpheus-mattermost serve|validate|healthcheck|export-checkpoint|list-channel-admission-bindings|check-channel-admission")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
+	trace := flags.String("trace", "", "channel admission probe correlation ID")
 	workflow := flags.String("workflow", "", "workflow ID for checkpoint export")
 	epoch := flags.String("epoch", "", "new ownership operation UUID")
 	address := flags.String("url", healthURL(), "health endpoint")
@@ -66,6 +67,19 @@ func run(args []string) error {
 			_, err = fmt.Fprintln(os.Stdout, "Configuration valid.")
 		}
 		return err
+	case "list-channel-admission-bindings", "check-channel-admission":
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		if args[0] == "check-channel-admission" {
+			return service.CheckChannelAdmission(ctx, cfg, *trace, os.Stdin, os.Stdout)
+		}
+		routes, err := service.ChannelAdmissionBindings(cfg)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(routes)
 	case "export-checkpoint":
 		return exportCheckpoint(ctx, *workflow, *epoch)
 	case "serve":

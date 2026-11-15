@@ -434,3 +434,31 @@ Original attachments remain available through the normal file protocol. Each
 transcript is appended to its author's message. Local-policy workflows cannot
 use this option: their configured local input processor owns audio extraction and
 masking, and must never send original audio to the model.
+
+### Direct channel admission
+
+Set `MATTERMOST_CHANNEL_ADMISSION_TRANSPORT=data` to call the shared authority
+through the connector's private Data socket at `/run/kord-channel-data/api.sock`.
+Mount the socket directory read-only and give the connector only its assigned
+socket group. Mount a root-owned, read-only `/run/orpheus-channel-admission/client.json`
+(mode 0440 or 0400) containing `token` and `binding`. Use the individual
+channel client's existing `channel.admit` token. Pin the lower-case SHA-256
+produced by Provider's `binding_digest(project_routes(settings))`. Publish
+credential or pin changes as one atomic root-owned file in the mounted directory.
+
+The connector reads the credential on each admission, checks the response's
+request ID and binding, and repeats the decision before delivery. A closed
+socket, a revoked credential, an invalid response or an unknown transport
+blocks the operation. Invalid credentials or infrastructure errors report
+unavailability, while a confirmed authority refusal keeps its documented reason.
+Other workflows continue to use their configured transport. Keep credentials
+outside workflow files, shared settings, logs and AgentBox mounts.
+
+For read-only verification in the connector container, run
+`/orpheus-mattermost list-channel-admission-bindings` to list the local
+workflow and channel IDs. Run `/orpheus-mattermost check-channel-admission
+-trace <32-lowercase-hex>` with a JSON object on stdin containing `workflow`,
+`channel`, `bot`, `audience` and `authors`. Supply the private verification
+fixtures on the deployment host. The command uses the ordinary client and its
+own credentials. Its stdout contains correlated JSON events and a final object
+with `status` (204, 403 or 503) and a bounded `code` for a refusal or failure.
