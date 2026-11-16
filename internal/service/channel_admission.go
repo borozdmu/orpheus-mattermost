@@ -109,6 +109,9 @@ func unixAdmissionClient(path string) *http.Client {
 
 var channelHTTP = unixAdmissionClient(admissionSocket)
 
+// loadChannelCredentials is replaced only by tests; production reads the root-owned client file.
+var loadChannelCredentials = readChannelCredentials
+
 func directGate(ctx context.Context, params channelRequest, access *config.Access, c channelCredentials, client *http.Client) error {
 	id := uuid.NewString()
 	trace, _ := ctx.Value(directoryProbeKey{}).(string)

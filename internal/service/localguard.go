@@ -27,7 +27,7 @@ func localGate(ctx context.Context, w config.Workflow, env conversation.Envelope
 		if mode != "data" {
 			return unavailable()
 		}
-		c, ok := readChannelCredentials()
+		c, ok := loadChannelCredentials()
 		if !ok {
 			return unavailable()
 		}

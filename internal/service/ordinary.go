@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/config"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/conversation"
+	"github.com/orpheus-agents/orpheus-mattermost/internal/delivery"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/mattermost"
 )
 
@@ -130,7 +131,7 @@ func (e *Engine) workflowGate(ctx context.Context, w config.Workflow, env conver
 	if os.Getenv(directAdmissionMode) != "data" || env.AccessProof == nil || !slices.Equal(audience, env.AccessProof.AudienceSubjects) || len(authors) == 0 {
 		return unavailable()
 	}
-	c, ok := readChannelCredentials()
+	c, ok := loadChannelCredentials()
 	if !ok {
 		return unavailable()
 	}
@@ -182,4 +183,46 @@ func ordinaryAdmission(ctx context.Context, o ordinaryObservation, c channelCred
 	default:
 		return unavailable()
 	}
+}
+
+const (
+	ordinaryTooLarge = "Message exceeds the input size limit. Split the request."
+	ordinaryTextOnly = "This conversation accepts text only. Send the request without attachments."
+)
+
+func ordinaryHasFiles(env conversation.Envelope, posts []mattermost.Post) bool {
+	return slices.ContainsFunc(posts, func(p mattermost.Post) bool {
+		return slices.Contains(env.TriggerIDs, p.ID) && len(p.FileIDs) != 0
+	})
+}
+
+// rejectOrdinary consumes an input that can never start a text-only session.
+// Without the receipt, the builder would select the same earliest mention on
+// every pass and later mentions in the thread could never run. The notice is a
+// fixed text, yet it is still a new post: each fragment needs a fresh agent-use
+// decision for the observed audience and every trigger author.
+func (e *Engine) rejectOrdinary(ctx context.Context, w config.Workflow, key conversation.Key, p *delivery.Publisher, env conversation.Envelope, messages []conversation.InputMessage, posts []mattermost.Post, reason string) error {
+	access, proof, err := e.admission(ctx, w, key, env, posts)
+	if err != nil {
+		return err
+	}
+	env.AccessContext, env.AccessProof = access, proof
+	input := pending{Envelope: env}
+	for _, post := range posts {
+		if slices.Contains(env.TriggerIDs, post.ID) {
+			input.TriggerPosts = append(input.TriggerPosts, post)
+		}
+	}
+	actor, authors := triggerAuthors(input)
+	safe := *p
+	safe.BeforeCreate = func(ctx context.Context) error {
+		audience, _, err := e.confirmAudience(ctx, w, key)
+		if err != nil {
+			return err
+		}
+		return e.workflowGate(ctx, w, env, audience, authors)
+	}
+	err = e.reject(ctx, &safe, env, messages, reason)
+	p.Posts = safe.Posts
+	return e.accessNotice(ctx, w, p, env, actor, authors, err, "")
 }

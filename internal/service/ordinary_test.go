@@ -157,3 +157,106 @@ func TestOrdinaryReplyRechecksEveryOriginalBatchAuthor(t *testing.T) {
 		t.Fatal("missing source allowed")
 	}
 }
+
+// ordinaryThreadFixture connects an ordinary workflow to a synthetic agent-use authority.
+func ordinaryThreadFixture(t *testing.T, allowed *bool) (*Engine, *accessAPI, *accessSource, conversation.Key, config.Workflow, *int) {
+	t.Helper()
+	e, a, src, _, key, w := protectedFixture(t)
+	w.Access = &config.Access{OrdinaryAgentUse: true, ChannelOnly: true, Namespace: "test", BotID: e.Bot.ID}
+	w.IncludeIDs = nil
+	w.PrivateChannels = true
+	src.channel.Shared = new(false)
+	src.users = map[string]mattermost.User{e.Bot.ID: {ID: e.Bot.ID, Username: "test-bot", IsBot: true}}
+	slices.Sort(src.audience)
+	e.SourceID = w.Mattermost.Source(e.Bot.ID)
+	key.Source = e.SourceID
+	t.Setenv(directAdmissionMode, "data")
+	calls := 0
+	s := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		calls++
+		var req struct {
+			ID     string          `json:"request_id"`
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Method != "audience.agent_admit" {
+			t.Error("bad ordinary authority request")
+		}
+		sum := sha256.Sum256(req.Params)
+		rw.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(rw).Encode(map[string]any{"ok": true, "request_id": req.ID, "result": map[string]any{"allowed": *allowed, "purpose": "agent_use", "observation_sha256": hex.EncodeToString(sum[:])}})
+	}))
+	t.Cleanup(s.Close)
+	client := s.Client()
+	client.Transport = roundTripAt{s.URL, client.Transport}
+	oldHTTP, oldCredentials := channelHTTP, loadChannelCredentials
+	channelHTTP = client
+	loadChannelCredentials = func() (channelCredentials, bool) { return channelCredentials{token: "synthetic"}, true }
+	t.Cleanup(func() { channelHTTP, loadChannelCredentials = oldHTTP, oldCredentials })
+	return e, a, src, key, w, &calls
+}
+
+func ordinaryRejections(src *accessSource, reason string) int {
+	n := 0
+	for _, p := range src.posts {
+		if p.UserID == src.bot && p.Message == reason {
+			n++
+		}
+	}
+	return n
+}
+
+// An unusable mention must be consumed, or the builder selects it on every pass
+// and no later mention in the same thread can start.
+func TestOrdinaryUnusableInputIsConsumed(t *testing.T) {
+	for _, tc := range []struct {
+		name, reason string
+		prepare      func(*Engine, *accessSource)
+	}{
+		{"attachment", ordinaryTextOnly, func(_ *Engine, s *accessSource) { s.posts[0].FileIDs = []string{strings.Repeat("f", 26)} }},
+		{"oversized", ordinaryTooLarge, func(e *Engine, s *accessSource) {
+			e.Config.MaxRequestBytes = 4096
+			s.posts[0].Message = "@orpheus " + strings.Repeat("large ", 2000)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			allowed := true
+			e, a, src, key, w, calls := ordinaryThreadFixture(t, &allowed)
+			tc.prepare(e, src)
+			for range 2 {
+				if err := e.Thread(t.Context(), w, key, src.channel, true); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(a.attempts) != 0 || src.calls != 1 || ordinaryRejections(src, tc.reason) != 1 || *calls == 0 {
+				t.Fatal("unusable input was not durably rejected once after authorization", len(a.attempts), src.calls, *calls)
+			}
+			if _, frozen := e.get(key); frozen {
+				t.Fatal("rejected input stayed frozen")
+			}
+			next := strings.Repeat("n", 26)
+			appendAccessPost(src, key, next, src.posts[0].UserID, "@orpheus short question", 5000)
+			// The next text mention reaches local input processing, which is absent in tests.
+			_ = e.Thread(t.Context(), w, key, src.channel, true)
+			if p, frozen := e.get(key); !frozen || p.Envelope.Anchor != next {
+				t.Fatal("later mention remained blocked by the rejected one")
+			}
+		})
+	}
+}
+
+func TestOrdinaryRejectionRequiresAgentUseGrant(t *testing.T) {
+	allowed := false
+	e, a, src, key, w, _ := ordinaryThreadFixture(t, &allowed)
+	src.posts[0].FileIDs = []string{strings.Repeat("f", 26)}
+	if err := e.Thread(t.Context(), w, key, src.channel, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.attempts) != 0 || ordinaryRejections(src, ordinaryTextOnly) != 0 || src.calls != 1 {
+		t.Fatal("rejection posted without a grant, or the refusal was not noticed", src.calls)
+	}
+	src.fail = true
+	if err := e.Thread(t.Context(), w, key, src.channel, true); err != nil || src.calls != 1 {
+		t.Fatal("refused input was not consumed", err)
+	}
+}

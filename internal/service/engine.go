@@ -657,10 +657,14 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 		}
 		return buildErr
 	}
-	if buildErr != nil {
-		if w.OrdinaryUse() {
-			return buildErr
+	if w.OrdinaryUse() {
+		if buildErr != nil {
+			return e.rejectOrdinary(ctx, w, key, p, env, messages, posts, ordinaryTooLarge)
 		}
+		if ordinaryHasFiles(env, posts) {
+			return e.rejectOrdinary(ctx, w, key, p, env, messages, posts, ordinaryTextOnly)
+		}
+	} else if buildErr != nil {
 		return e.reject(ctx, p, env, messages, "Message exceeds the input size limit. Split the request.")
 	}
 	if run != nil && w.Access != nil && w.Access.LocalPolicy() {
