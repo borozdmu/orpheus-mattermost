@@ -142,6 +142,18 @@ func candidate(p mattermost.Post, ch mattermost.Channel, w config.Workflow, bot 
 func (r *Runtime) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("POST /internal/audience/confirm", withDirectoryProbe(r.Engine.corporateHandler()))
+	schedules, err := scheduleHandler(func(source string) *Engine {
+		if r.Engine.SourceID == source {
+			return r.Engine
+		}
+		return nil
+	})
+	if err != nil && r.Logger != nil {
+		r.Logger.Error("schedule witness disabled", "error", err)
+	}
+	if schedules != nil {
+		mux.Handle("POST /internal/schedules/{schedule}/occurrences/{occurrence}", schedules)
+	}
 	health := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /healthz", health)

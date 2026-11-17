@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/orpheus-agents/orpheus-mattermost/internal/config"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/conversation"
@@ -120,7 +121,16 @@ func (e *Engine) confirmCorporate(ctx context.Context, a agentcontract.Assignmen
 	return nil
 }
 func (e *Engine) corporateHandler() http.Handler {
-	return agentcontract.Handler(func() string { return os.Getenv("ORPHEUS_AUDIENCE_SECRET") }, e.confirmCorporate)
+	return agentcontract.Handler(func() string { return os.Getenv("ORPHEUS_AUDIENCE_SECRET") }, e.confirmExternal)
+}
+
+// confirmExternal serves Core. A scheduled assignment is valid only while its
+// approved occurrence is registered and current.
+func (e *Engine) confirmExternal(ctx context.Context, a agentcontract.Assignment) error {
+	if !currentSchedule(a, e.SourceID, time.Now()) {
+		return errScheduleUnconfirmed
+	}
+	return e.confirmCorporate(scheduleTrace(ctx, a.Delivery.Thread, a.Delivery.Message), a)
 }
 
 func (e *Engine) setCorporateConfig(cfg config.Config) {
