@@ -81,11 +81,25 @@ func (m *Manager) Handler() http.Handler {
 	mux.Handle("POST /internal/audience/confirm", withDirectoryProbe(agentcontract.Handler(func() string { return os.Getenv("ORPHEUS_AUDIENCE_SECRET") }, func(ctx context.Context, a agentcontract.Assignment) error {
 		for _, c := range m.connections {
 			if c.runtime.Engine.SourceID == a.Delivery.Source {
-				return c.runtime.Engine.confirmCorporate(ctx, a)
+				return c.runtime.Engine.confirmExternal(ctx, a)
 			}
 		}
 		return errors.New("unknown connector")
 	})))
+	schedules, err := scheduleHandler(func(source string) *Engine {
+		for _, c := range m.connections {
+			if c.runtime.Engine.SourceID == source {
+				return c.runtime.Engine
+			}
+		}
+		return nil
+	})
+	if err != nil && m.Logger != nil {
+		m.Logger.Error("schedule witness disabled", "error", err)
+	}
+	if schedules != nil {
+		mux.Handle("POST /internal/schedules/{schedule}/occurrences/{occurrence}", schedules)
+	}
 	health := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
 	ready := func(w http.ResponseWriter, _ *http.Request) {
 		for _, c := range m.connections {
