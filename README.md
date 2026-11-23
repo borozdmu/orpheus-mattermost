@@ -116,9 +116,16 @@ before releasing. If it is absent, inspect the
 [`cross-repository.yml` run history](https://github.com/borozdmu/ai-agents-releases-ci/actions/workflows/cross-repository.yml)
 for pending product CI or cross-repository failures. To run it manually, select
 **Run workflow** on `main` with `latest: true`; add `force: true` to retry after a
-failure. A previous success does not verify a new SHA. This checks compatibility
-and installs nothing on the server; installation is a separate step requiring
-separate approval.
+failure. A previous success does not verify a new SHA. This check itself
+installs nothing.
+
+Merging to `main` does reach production: once the SHA is verified and built, the
+deploy agent updates Mark's receiver (`ec-live-mark-connector-1`) when it is idle.
+The receiver restarts briefly and rolls back automatically if it does not come up.
+Every merged commit is deployed this way, including documentation-only changes.
+Only Mark's receiver is automatic. CXAssist and other Mattermost connections are
+still installed manually with separate approval. See the
+[deploy agent guide](https://github.com/borozdmu/ai-agents-releases-ci/blob/main/ops/deploy-agent/README.md#mattermost-марка).
 
 Pull requests and pushes to `main` run `make check` and `make smoke`.
 Pushing a version tag such as `v0.1.0` builds and publishes
