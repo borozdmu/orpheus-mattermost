@@ -11,7 +11,7 @@
 3. For a new independent task, create one branch from the fetched `origin/main` (for example, `git switch -c codex/<task> origin/main` in a clean checkout). When working with a local `main`, update it using `git merge --ff-only origin/main`. Read-only work needs no branch.
 4. Fetch main again before merging. Review the diff and required checks for the final PR revision. After merge, clean up only this task's branch and clean worktree once the changes are included and no one is using them.
 
-After merging to main, shared CI runs automatically. Before releasing a verified set, match the intended product commit to its entry in the [verified manifest](https://github.com/borozdmu/ai-agents-releases-ci/blob/latest-verified/latest.json).
+After merging to main, shared CI runs automatically and the verified commit is then deployed to Mark's receiver without a manual step, including documentation-only commits. CXAssist and other Mattermost connections stay manual. Before manually releasing a verified set, match the intended product commit to its entry in the [verified manifest](https://github.com/borozdmu/ai-agents-releases-ci/blob/latest-verified/latest.json).
 
 Read [README.md](README.md).
 
@@ -26,7 +26,7 @@ Read [README.md](README.md).
 * Suggest best practices, even if they may require refactoring.
 
 # Development workflow
-* Before releasing, wait for this project's exact SHA in `latest-verified/latest.json`; see [README.md: CI and releases](README.md#ci-and-releases).
+* Treat every merge to `main` as a production update of Mark's receiver. Before a manual release, wait for this project's exact SHA in `latest-verified/latest.json`; see [README.md: CI and releases](README.md#ci-and-releases).
 * Always write a comprehensive test suite covering the implementation alongside the implementation itself.
 * Run `make fix gofix check` after completing the implementation.
 
