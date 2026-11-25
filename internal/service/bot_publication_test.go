@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/orpheus-agents/orpheus-mattermost/internal/config"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/conversation"
@@ -23,7 +25,7 @@ func registeredBotUsers() map[string]mattermost.User {
 }
 
 func TestCorporatePublicBotPublicationRequiresUnchangedAudience(t *testing.T) {
-	for _, change := range []string{"reader left", "revision changed", "team changed", "channel became private", "unchanged"} {
+	for _, change := range []string{"reader left", "revision changed", "team changed", "channel became private", "route became private", "observation expired", "old authentic witness", "future witness", "mismatched witness time", "unchanged"} {
 		t.Run(change, func(t *testing.T) {
 			corporateDirectory(t)
 			e, api, mm, _, key, w := protectedFixture(t)
@@ -61,6 +63,41 @@ func TestCorporatePublicBotPublicationRequiresUnchangedAudience(t *testing.T) {
 				mm.channel.TeamID = strings.Repeat("u", 26)
 			case "channel became private":
 				mm.channel.Type = "P"
+			case "route became private":
+				mm.channel.Type = "P"
+				w.PublicTeamAudience = false
+				w.PrivateChannels = true
+				e.Config.Workflows[0] = w
+			case "observation expired":
+				previous := publicBotOutputNow
+				publicBotOutputNow = func() time.Time { return time.Now().Add(2 * time.Minute) }
+				t.Cleanup(func() { publicBotOutputNow = previous })
+			case "old authentic witness", "future witness", "mismatched witness time":
+				initial := &session.Messages[0]
+				env, err := conversation.Decode(initial.Metadata)
+				if err != nil || env.AccessContext == nil || env.AccessContext.Assignment == nil {
+					t.Fatal("missing historical assignment", err)
+				}
+				a, err := agentcontract.Decode(*env.AccessContext.Assignment)
+				if err != nil {
+					t.Fatal(err)
+				}
+				a.Confirmation.ObservedAt = time.Now().Add(-time.Hour)
+				if change == "future witness" {
+					a.Confirmation.ObservedAt = time.Now().Add(time.Hour)
+				}
+				if change != "mismatched witness time" {
+					env.AccessContext.ContextObservedAt = a.Confirmation.ObservedAt
+				}
+				if err = a.Seal(os.Getenv("ORPHEUS_AUDIENCE_SECRET")); err != nil {
+					t.Fatal(err)
+				}
+				raw, err := json.Marshal(a)
+				if err != nil {
+					t.Fatal(err)
+				}
+				env.AccessContext.Assignment = new(json.RawMessage(raw))
+				initial.Metadata = testMetadata(env)
 			}
 			for range 2 {
 				_ = e.Thread(t.Context(), w, key, mm.channel, true)
@@ -72,7 +109,7 @@ func TestCorporatePublicBotPublicationRequiresUnchangedAudience(t *testing.T) {
 				}
 			}
 			want := 0
-			if change == "unchanged" {
+			if change == "unchanged" || change == "old authentic witness" {
 				want = 1
 			}
 			if published != want {

@@ -14,6 +14,8 @@ import (
 	"github.com/orpheus-agents/orpheus/agentcontract"
 )
 
+var publicBotOutputNow = time.Now
+
 func corporateReaders(w config.Workflow, roster []string) ([]agentcontract.Principal, error) {
 	var readers []agentcontract.Principal
 	if w.Access == nil {
@@ -132,10 +134,9 @@ func (e *Engine) confirmCorporate(ctx context.Context, a agentcontract.Assignmen
 	return nil
 }
 
-// confirmPublicBotOutput reuses the exact corporate audience confirmation at
-// publication. The assignment is historical: authenticate its witness at its
-// observation time, then obtain fresh audience and registry evidence below.
-func (e *Engine) confirmPublicBotOutput(ctx context.Context, env conversation.Envelope, key conversation.Key) error {
+// confirmPublicBotOutput authenticates the historical assignment and compares it
+// with this publication's fresh roster, policy and final audience observation.
+func (e *Engine) confirmPublicBotOutput(ctx context.Context, env conversation.Envelope, key conversation.Key, roster []string, observed time.Time) error {
 	ch, err := e.MM.Channel(ctx, key.Channel)
 	if err != nil {
 		return err
@@ -148,11 +149,36 @@ func (e *Engine) confirmPublicBotOutput(ctx context.Context, env conversation.En
 	}
 	a, err := agentcontract.Decode(*env.AccessContext.Assignment)
 	if err != nil || a.Verify(os.Getenv("ORPHEUS_AUDIENCE_SECRET"), a.Confirmation.ObservedAt) != nil ||
+		!a.Confirmation.ObservedAt.Equal(env.AccessContext.ContextObservedAt) ||
+		a.Author.ID != env.AccessContext.Subject.ID || a.Author.Namespace != env.AccessContext.Subject.Namespace ||
 		a.InvocationID != env.AccessContext.InvocationID || a.Delivery.Source != env.Source ||
+		a.Delivery.Source != e.SourceID || a.Delivery.Connector != "mattermost" ||
 		a.Delivery.Chat != env.Channel || a.Delivery.Thread != env.Root || a.Delivery.Message != env.Anchor {
 		return errWithholdOutput
 	}
-	return e.confirmCorporate(ctx, a)
+	e.corporateMu.RLock()
+	cfg := e.Config
+	if e.corporateConfig != nil {
+		cfg = *e.corporateConfig
+	}
+	w, err := cfg.Route(key.Channel, a.Audience.ChannelType)
+	e.corporateMu.RUnlock()
+	if err != nil || w == nil || w.Draining || w.Access == nil || !w.Access.VerifyAccountCards || validateProtectedContext(env, *w) != nil {
+		return errWithholdOutput
+	}
+	copy := a
+	copy.Agent, copy.Confirmation.Revision = w.AgentID, w.EffectiveRevision
+	copy.ProviderContext = env.AccessContext.ScopeContext
+	copy.Readers, err = corporateReaders(*w, roster)
+	if err != nil {
+		return errWithholdOutput
+	}
+	copy.Audience, err = e.describeAudience(ctx, *w, key, roster)
+	now := publicBotOutputNow()
+	if err != nil || observed.IsZero() || observed.After(now) || now.Sub(observed) >= time.Minute || a.Confirmation.ObservedAt.After(now) || copy.Digest() != a.Digest() {
+		return errWithholdOutput
+	}
+	return nil
 }
 
 func (e *Engine) corporateHandler() http.Handler {

@@ -222,17 +222,12 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 				}
 				return errWithholdOutput
 			}
-			audience, _, err := e.confirmAudience(ctx, w, p.Key)
+			audience, observed, err := e.confirmAudience(ctx, w, p.Key)
 			if err != nil {
 				return err
 			}
 			if _, _, err = projectAccess(*w.Access, audience, env.AccessContext.Subject.ID); err != nil {
 				return err
-			}
-			if w.AgentID != "" && w.PublicTeamAudience && len(w.Access.BotRecipients) > 0 {
-				if err = e.confirmPublicBotOutput(ctx, env, p.Key); err != nil {
-					return err
-				}
 			}
 			if w.OrdinaryUse() && !slices.Equal(audience, env.AccessProof.AudienceSubjects) {
 				return errWithholdOutput
@@ -246,7 +241,14 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 			if err != nil {
 				return err
 			}
-			return e.workflowGate(ctx, w, env, audience, authors)
+			if err = e.workflowGate(ctx, w, env, audience, authors); err != nil {
+				return err
+			}
+			wasPublic := env.AccessProof.Audience != nil && env.AccessProof.Audience.Kind == "team-current"
+			if w.AgentID != "" && len(w.Access.BotRecipients) > 0 && (w.PublicTeamAudience || wasPublic) {
+				return e.confirmPublicBotOutput(ctx, env, p.Key, audience, observed)
+			}
+			return nil
 		}
 		defer func() { p.BeforeCreate = nil }()
 	}
