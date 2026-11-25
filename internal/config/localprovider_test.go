@@ -50,6 +50,49 @@ func TestLocalProviderScopeValidation(t *testing.T) {
 	}
 }
 
+func TestContinueThreadSessionsValidationAndRevision(t *testing.T) {
+	for _, scenario := range []string{"valid", "no provider context", "ordinary use"} {
+		t.Run(scenario, func(t *testing.T) {
+			c, w := localProviderWorkflow(t)
+			w.Access.ContinueThreadSessions = true
+			switch scenario {
+			case "no provider context":
+				w.Access.LocalProviderContext = false
+			case "ordinary use":
+				w.Access = &Access{OrdinaryAgentUse: true, ChannelOnly: true, ContinueThreadSessions: true, Namespace: w.Access.Namespace, BotID: w.Access.BotID}
+			}
+			if err := c.validate(); (err == nil) != (scenario == "valid") {
+				t.Fatalf("validation: %v", err)
+			}
+		})
+	}
+	c, w := localProviderWorkflow(t)
+	if err := c.validate(); err != nil {
+		t.Fatal(err)
+	}
+	if w.Access.MultipleRuns() {
+		t.Fatal("local provider binding continues without the flag")
+	}
+	old := w.EffectiveRevision
+	w.Access.ContinueThreadSessions = true
+	if err := c.validate(); err != nil {
+		t.Fatal(err)
+	}
+	if old == w.EffectiveRevision {
+		t.Fatal("continuation change retained old session revision")
+	}
+	if !w.Access.MultipleRuns() {
+		t.Fatal("flag does not allow continuation")
+	}
+	if (*Access)(nil).MultipleRuns() != true || (&Access{ChannelOnly: true}).MultipleRuns() || (&Access{LocalServices: true}).MultipleRuns() {
+		t.Fatal("run policy changed for workflows without the flag")
+	}
+	raw, err := json.Marshal(Access{})
+	if err != nil || strings.Contains(string(raw), "continue_thread_sessions") {
+		t.Fatal("default changes serialized access", err)
+	}
+}
+
 func TestLocalBeforeRunPythonValidationAndRevision(t *testing.T) {
 	for _, scenario := range []string{"valid", "large", "NUL", "no access", "no local services", "encoded hook too large"} {
 		t.Run(scenario, func(t *testing.T) {

@@ -400,7 +400,7 @@ func (c *Client) Submit(ctx context.Context, w config.Workflow, e conversation.E
 		}
 		namespace := e.Key().Namespace()
 		externalKey := e.Key().External()
-		sessionBody = api.CreateSession{AccessContext: access, AllowMultipleRuns: new(!localPolicy), Messages: input, Namespace: &namespace, ExternalKey: &externalKey, Configuration: conf, Env: &env, EnvFrom: &envFrom, InputFingerprint: &fingerprint}
+		sessionBody = api.CreateSession{AccessContext: access, AllowMultipleRuns: new(w.Access.MultipleRuns()), Messages: input, Namespace: &namespace, ExternalKey: &externalKey, Configuration: conf, Env: &env, EnvFrom: &envFrom, InputFingerprint: &fingerprint}
 		request = sessionBody
 		key = e.Key().Operation(e.Anchor, "session", e.Key().External(), predecessor)
 	}

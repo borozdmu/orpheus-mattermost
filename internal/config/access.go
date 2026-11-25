@@ -14,23 +14,32 @@ import (
 // Access maps confirmed source identities into an integration's service context.
 // The provider owns the meaning of fields and mapped identities.
 type Access struct {
-	OrdinaryAgentUse     bool               `yaml:"ordinary_agent_use,omitempty" json:"ordinary_agent_use,omitempty"`
-	VerifyAccountCards   bool               `yaml:"verify_account_cards,omitempty" json:"verify_account_cards,omitempty"`
-	LocalProviderContext bool               `yaml:"local_provider_context,omitempty" json:"local_provider_context,omitempty"`
-	LocalFiles           bool               `yaml:"local_files,omitempty" json:"local_files,omitempty"`
-	ChannelOnly          bool               `yaml:"channel_only,omitempty" json:"channel_only,omitempty"`
-	LocalServices        bool               `yaml:"local_services,omitempty" json:"local_services,omitempty"`
-	Peer                 *PeerRecipient     `yaml:"peer_recipient,omitempty" json:"peer_recipient,omitempty"`
-	Namespace            string             `yaml:"namespace" json:"namespace"`
-	BotID                string             `yaml:"bot_id" json:"bot_id"`
-	ScopeContext         map[string]any     `yaml:"scope_context" json:"scope_context"`
-	IdentityProjection   IdentityProjection `yaml:"identity_projection" json:"identity_projection"`
+	OrdinaryAgentUse     bool `yaml:"ordinary_agent_use,omitempty" json:"ordinary_agent_use,omitempty"`
+	VerifyAccountCards   bool `yaml:"verify_account_cards,omitempty" json:"verify_account_cards,omitempty"`
+	LocalProviderContext bool `yaml:"local_provider_context,omitempty" json:"local_provider_context,omitempty"`
+	// ContinueThreadSessions lets a local-provider binding continue its thread
+	// session. Admission, input projection and the core's scope check still run
+	// for every mention; a changed scope starts a clean session.
+	ContinueThreadSessions bool               `yaml:"continue_thread_sessions,omitempty" json:"continue_thread_sessions,omitempty"`
+	LocalFiles             bool               `yaml:"local_files,omitempty" json:"local_files,omitempty"`
+	ChannelOnly            bool               `yaml:"channel_only,omitempty" json:"channel_only,omitempty"`
+	LocalServices          bool               `yaml:"local_services,omitempty" json:"local_services,omitempty"`
+	Peer                   *PeerRecipient     `yaml:"peer_recipient,omitempty" json:"peer_recipient,omitempty"`
+	Namespace              string             `yaml:"namespace" json:"namespace"`
+	BotID                  string             `yaml:"bot_id" json:"bot_id"`
+	ScopeContext           map[string]any     `yaml:"scope_context" json:"scope_context"`
+	IdentityProjection     IdentityProjection `yaml:"identity_projection" json:"identity_projection"`
 }
 
 // LocalPolicy keeps input processing and authorization on the connector host.
 // LocalServices explicitly permits selected services without a transport token.
 func (a *Access) LocalPolicy() bool {
 	return a != nil && (a.ChannelOnly || a.LocalServices)
+}
+
+// MultipleRuns reports whether a new session may continue with later runs.
+func (a *Access) MultipleRuns() bool {
+	return !a.LocalPolicy() || a.ContinueThreadSessions
 }
 
 // PeerRecipient names a mandatory bot that can see the channel but cannot author inputs.
@@ -98,7 +107,7 @@ func (id *SubjectID) UnmarshalYAML(node *yaml.Node) error {
 func (a Access) Validate() error {
 	if a.OrdinaryAgentUse {
 		if !a.ChannelOnly || !accessNamePattern.MatchString(a.Namespace) || !ValidID(a.BotID) ||
-			a.Peer != nil || a.LocalFiles || a.LocalServices || a.LocalProviderContext || a.VerifyAccountCards ||
+			a.Peer != nil || a.LocalFiles || a.LocalServices || a.LocalProviderContext || a.ContinueThreadSessions || a.VerifyAccountCards ||
 			len(a.ScopeContext) != 0 || a.IdentityProjection.ActorField != "" || a.IdentityProjection.AudienceField != "" || len(a.IdentityProjection.Subjects) != 0 {
 			return errors.New("ordinary agent use requires only an isolated transport namespace and its own bot")
 		}
@@ -109,6 +118,9 @@ func (a Access) Validate() error {
 		if !a.LocalServices || a.ChannelOnly || a.Peer == nil || !ok || !strings.HasSuffix(space, "."+a.Peer.ID) {
 			return errors.New("local provider context requires a registered space pinned to the verified peer")
 		}
+	}
+	if a.ContinueThreadSessions && !a.LocalProviderContext {
+		return errors.New("thread session continuation requires local provider context")
 	}
 	if a.LocalFiles && !a.LocalServices {
 		return errors.New("local files require local services")

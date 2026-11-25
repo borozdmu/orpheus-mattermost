@@ -16,6 +16,13 @@ import (
 	"github.com/orpheus-agents/orpheus-mattermost/internal/conversation"
 )
 
+// localInputTransport reaches the host's local input processor. Tests replace it.
+var localInputTransport = func() *http.Transport {
+	return &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", "/run/orpheus-input/input.sock")
+	}}
+}
+
 // The local processor owns extraction and masking. The sandbox receives only
 // approved text. Never give it original attachments or a Mattermost credential.
 func projectLocalInput(ctx context.Context, p *pending, mm MM) error {
@@ -23,9 +30,7 @@ func projectLocalInput(ctx context.Context, p *pending, mm MM) error {
 	if !ok {
 		return errors.New("local file source unavailable")
 	}
-	t := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", "/run/orpheus-input/input.sock")
-	}}
+	t := localInputTransport()
 	defer t.CloseIdleConnections()
 	client := &http.Client{Transport: t, Timeout: 5 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	transform := func(mime string, b []byte) (string, error) {

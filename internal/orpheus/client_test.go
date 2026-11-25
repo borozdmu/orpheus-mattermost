@@ -508,7 +508,7 @@ func TestSubmitSeparatesSessionAndRunEnvironment(t *testing.T) {
 }
 
 func TestLocalProviderSubmitPreservesVerifiedContextAndLocalHooks(t *testing.T) {
-	for _, scenario := range []string{"verified", "missing context"} {
+	for _, scenario := range []string{"verified", "missing context", "continued thread"} {
 		t.Run(scenario, func(t *testing.T) {
 			calls := 0
 			expected := &api.AccessContext{ScopeContext: api.AccessScopeContext{"policy_space_id": json.RawMessage(`"test.peer"`), "reader_user_ids": json.RawMessage(`[42]`)}}
@@ -538,8 +538,11 @@ func TestLocalProviderSubmitPreservesVerifiedContextAndLocalHooks(t *testing.T) 
 				if string(got) != string(want) {
 					t.Error("verified context changed")
 				}
-				if len(body.Env)+len(body.EnvFrom)+len(body.Configuration.Sandbox.EnvFrom) != 0 || body.AllowMultipleRuns {
-					t.Error("transport secret or reusable session enabled")
+				if len(body.Env)+len(body.EnvFrom)+len(body.Configuration.Sandbox.EnvFrom) != 0 {
+					t.Error("transport secret reached the sandbox")
+				}
+				if body.AllowMultipleRuns != (scenario == "continued thread") {
+					t.Error("session run policy does not follow the continuation flag")
 				}
 				if body.Configuration.Hooks.BeforeRun != sandbox.LocalBeforeRun("print('trusted')") || body.Configuration.Hooks.AfterRun != sandbox.LocalAfterRun() {
 					t.Error("local prepare/export replaced")
@@ -555,7 +558,7 @@ func TestLocalProviderSubmitPreservesVerifiedContextAndLocalHooks(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			w := config.Workflow{Access: &config.Access{LocalServices: true, LocalProviderContext: true, LocalFiles: true}, Services: []string{"local-memory", "kord_protected"}, LocalBeforeRunPython: "print('trusted')"}
+			w := config.Workflow{Access: &config.Access{LocalServices: true, LocalProviderContext: true, LocalFiles: true, ContinueThreadSessions: scenario == "continued thread"}, Services: []string{"local-memory", "kord_protected"}, LocalBeforeRunPython: "print('trusted')"}
 			w.Mattermost.TokenEnv = "PRIVATE_BOT_TOKEN"
 			env := conversation.Envelope{Anchor: "example", AccessContext: expected}
 			if scenario == "missing context" {
