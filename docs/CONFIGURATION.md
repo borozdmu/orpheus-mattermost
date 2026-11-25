@@ -413,6 +413,23 @@ both dispatch and publication; unavailable or denying policy blocks either.
 Only configure services whose credentials are intended for this exact local
 owner policy. This mode does not request provider-issued credentials.
 
+`continue_thread_sessions: true` lets a `local_provider_context` binding keep
+one session per thread:
+
+| | Default | `continue_thread_sessions` |
+| --- | --- | --- |
+| Session | single run, sandbox deleted | multiple runs, sandbox paused |
+| Next mention | new clean session | run in the same session |
+| Model input | the new mention only | the new mention only; earlier turns stay in model memory |
+| Host policy and `/project` | every dispatch and publication | unchanged |
+
+The core rechecks the provider scope on every run; `service_scope_changed`
+starts a clean session. Lost context, a lost sandbox or the token limit also
+start one. Enabling the flag changes the workflow revision. Mattermost tokens,
+attachment hooks and original files still never reach the sandbox. A paused
+sandbox keeps its workspace and process memory until the core's
+`SANDBOX_PAUSED_RETENTION_DAYS` removes it; set that retention for the agent.
+
 ## Voice input
 
 For ordinary workflows, set `transcribe_voice: true` and provide process settings
