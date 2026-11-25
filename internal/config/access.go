@@ -119,8 +119,10 @@ func (a Access) Validate() error {
 			return errors.New("local provider context requires a registered space pinned to the verified peer")
 		}
 	}
-	if a.ContinueThreadSessions && !a.LocalProviderContext {
-		return errors.New("thread session continuation requires local provider context")
+	if a.ContinueThreadSessions && (!a.LocalProviderContext || a.LocalFiles) {
+		// Local file export publishes the whole output folder of the run's sandbox;
+		// a continued sandbox would publish earlier runs' files again.
+		return errors.New("thread session continuation requires local provider context without local files")
 	}
 	if a.LocalFiles && !a.LocalServices {
 		return errors.New("local files require local services")
