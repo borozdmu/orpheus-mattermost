@@ -177,6 +177,22 @@ func TestAdmissionFreezesLocalFiles(t *testing.T) {
 	}
 }
 
+func TestAdmissionFreezesOriginalLocalFiles(t *testing.T) {
+	for _, c := range []struct{ files, original, want bool }{{true, true, true}, {true, false, false}, {false, true, false}} {
+		b, key, _ := builder(t)
+		b.Workflow.Access = &config.Access{LocalServices: true, LocalFiles: c.files, LocalFilesOriginal: c.original}
+		post := mattermost.Post{ID: key.Root, ChannelID: key.Channel, UserID: id(3), CreateAt: 1000, Message: "@orpheus help"}
+		env, _, err := b.BuildMessages(t.Context(), key, mattermost.Channel{Type: "O"}, []mattermost.Post{post}, Snapshot{}, true, time.Unix(10, 0))
+		if err != nil || env.LocalFilesOriginal != c.want {
+			t.Fatal("admission did not freeze original output policy", c, env.LocalFilesOriginal, err)
+		}
+		b.Workflow.Access.LocalFilesOriginal = !c.original
+		if env.LocalFilesOriginal != c.want {
+			t.Fatal("accepted contract changed with workflow")
+		}
+	}
+}
+
 func firstPostFrontMatter(t *testing.T, text string) map[string]any {
 	t.Helper()
 	body, ok := strings.CutPrefix(text, "---\n")

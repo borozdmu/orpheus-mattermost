@@ -126,6 +126,28 @@ class LocalTools(unittest.TestCase):
         self.assertEqual((self.root / 'elsewhere/keep.txt').read_text(), 'outside')
         self.assertTrue(next((output / 'previous-runs').iterdir()).is_symlink())
 
+    def test_occupied_archive_name_cannot_block_later_runs(self):
+        output = self.exporter()
+        (self.root / 'elsewhere').mkdir()
+        for occupant in ('link', 'file'):
+            output.mkdir(exist_ok=True)
+            (output / 'files').mkdir()
+            (output / 'files/new.csv').write_text('a')
+            if occupant == 'link':
+                (output / 'previous-runs').symlink_to(self.root / 'elsewhere')
+            else:
+                (output / 'previous-runs').write_text('not a folder')
+            with patch.dict(os.environ, self.env, clear=True):
+                local.prepare()
+            self.assertTrue((output / 'previous-runs').is_dir() and not (output / 'previous-runs').is_symlink())
+            self.assertFalse((output / 'files').exists())
+            self.assertEqual(list((self.root / 'elsewhere').iterdir()), [])
+            for p in list(output.iterdir()):
+                if p.name.startswith('previous-runs'):
+                    if p.is_symlink() or p.is_file():p.unlink()
+                    else:
+                        import shutil;shutil.rmtree(p)
+
     def test_non_exporting_tool_keeps_its_files(self):
         (self.root / '.agent-memory/files').mkdir(parents=True)
         with patch.dict(os.environ, self.env, clear=True):

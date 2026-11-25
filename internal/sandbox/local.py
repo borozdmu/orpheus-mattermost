@@ -40,7 +40,13 @@ def retire_output(parent):
         os.stat('files', dir_fd=parent, follow_symlinks=False)
     except FileNotFoundError:
         return
-    archive = directory(parent, 'previous-runs')
+    try:
+        archive = directory(parent, 'previous-runs')
+    except OSError:
+        # The agent may have replaced the archive with a link or file; set it aside
+        # without following it so one bad entry cannot block every later run.
+        os.rename('previous-runs', 'previous-runs.displaced-' + uuid.uuid4().hex[:8], src_dir_fd=parent, dst_dir_fd=parent)
+        archive = directory(parent, 'previous-runs')
     try:
         # rename never follows a link planted by the agent; the name is unique per call.
         os.rename('files', time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()) + '-' + uuid.uuid4().hex[:8],

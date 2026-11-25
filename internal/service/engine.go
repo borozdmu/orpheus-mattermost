@@ -291,7 +291,7 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 	localFiles := env.LocalFiles || s.LocalFiles
 	if r.Terminal() && !stopped && (!w.Access.LocalPolicy() || localFiles) {
 		if localFiles {
-			output, err = e.localOutput(ctx, p, s, r, env, w.Access != nil && w.Access.LocalFilesOriginal)
+			output, err = e.localOutput(ctx, p, s, r, env, env.LocalFilesOriginal)
 		} else {
 			output, err = hookOutput(s, r, env, e.Bot.ID)
 		}
