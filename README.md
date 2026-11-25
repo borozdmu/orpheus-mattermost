@@ -214,7 +214,12 @@ workspace edits. Before each run, local initialization moves that tool's earlier
 The connector obtains that manifest and bytes only through
 `/run/orpheus-output/output.sock`, verifies identities, size and hash, rechecks
 channel access before upload and publication, and uploads using its own token.
-Only the relay's text derivative formats are accepted. Existing bot receipts
+Only the relay's text derivative formats are accepted, unless
+`access_context.local_files_original: true` is set: then the connector accepts
+the relay's verified original XLSX, DOCX, PDF, CSV, TXT or MD files under the
+agent's own names (no path separators or leading dot, unique, up to 10 MB each).
+Choose it only with a relay that validates formats itself and for an audience
+entitled to the full documents. Existing bot receipts
 prevent duplicate uploads after reconciliation. Incomplete exports are not
 published. Transport secrets and original inputs never enter this output path.
 

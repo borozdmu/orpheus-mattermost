@@ -142,3 +142,29 @@ func TestLocalBeforeRunPythonValidationAndRevision(t *testing.T) {
 		t.Fatal("default changes serialized access", err)
 	}
 }
+
+func TestLocalFilesOriginalRequiresLocalFiles(t *testing.T) {
+	c, w := localProviderWorkflow(t)
+	w.Access.LocalFiles = true
+	w.Access.LocalFilesOriginal = true
+	if err := c.validate(); err != nil {
+		t.Fatal(err)
+	}
+	withOriginal := w.EffectiveRevision
+	w.Access.LocalFilesOriginal = false
+	if err := c.validate(); err != nil {
+		t.Fatal(err)
+	}
+	if withOriginal == w.EffectiveRevision {
+		t.Fatal("output mode change retained old session revision")
+	}
+	w.Access.LocalFiles = false
+	w.Access.LocalFilesOriginal = true
+	if err := c.validate(); err == nil {
+		t.Fatal("original files accepted without local export")
+	}
+	raw, err := json.Marshal(Access{})
+	if err != nil || strings.Contains(string(raw), "local_files_original") {
+		t.Fatal("default changes serialized access", err)
+	}
+}
