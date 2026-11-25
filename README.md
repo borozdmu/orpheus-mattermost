@@ -209,7 +209,8 @@ replace the local export hook. Changes invalidate the workflow revision.
 
 `access_context.local_files: true` additionally requires exactly one selected tool
 with `after_run: true`. The after hook runs its service-pinned bytes, ignoring
-workspace edits. The tool must seal its approved results in the host relay.
+workspace edits. Before each run, local initialization moves that tool's earlier
+`files/` folder to `previous-runs/`, so a continued session exports only new results. The tool must seal its approved results in the host relay.
 The connector obtains that manifest and bytes only through
 `/run/orpheus-output/output.sock`, verifies identities, size and hash, rechecks
 channel access before upload and publication, and uploads using its own token.

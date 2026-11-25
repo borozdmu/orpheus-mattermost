@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+import time
 import uuid
 
 
@@ -31,6 +32,21 @@ def write(parent, name, data):
             os.unlink(temp, dir_fd=parent)
         except FileNotFoundError:
             pass
+
+
+def retire_output(parent):
+    """Move earlier runs' results aside so export publishes only this run's files."""
+    try:
+        os.stat('files', dir_fd=parent, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    archive = directory(parent, 'previous-runs')
+    try:
+        # rename never follows a link planted by the agent; the name is unique per call.
+        os.rename('files', time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()) + '-' + uuid.uuid4().hex[:8],
+                  src_dir_fd=parent, dst_dir_fd=archive)
+    finally:
+        os.close(archive)
 
 
 def prepare(export=False):
@@ -70,6 +86,8 @@ def prepare(export=False):
             try:
                 write(child, 'client.py', source)
                 write(child, 'current-run.json', json.dumps(context).encode())
+                if item.get('after_run'):
+                    retire_output(child)
             finally:
                 os.close(child)
         if export:
