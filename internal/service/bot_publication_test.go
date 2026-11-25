@@ -22,6 +22,66 @@ func registeredBotUsers() map[string]mattermost.User {
 	}
 }
 
+func TestCorporatePublicBotPublicationRequiresUnchangedAudience(t *testing.T) {
+	for _, change := range []string{"reader left", "revision changed", "team changed", "channel became private", "unchanged"} {
+		t.Run(change, func(t *testing.T) {
+			corporateDirectory(t)
+			e, api, mm, _, key, w := protectedFixture(t)
+			e.SourceID = key.Source
+			w.AgentID, w.PublicTeamAudience = "mark", true
+			w.Access = registeredBotAccess(t, mm.bot, mm.posts[0].UserID)
+			const outside = "nnnnnnnnnnnnnnnnnnnnnnnnnn"
+			w.Access.IdentityProjection.Subjects[outside] = config.SubjectID(`77`)
+			mm.channel.Type, mm.channel.TeamID, mm.channel.Shared = "O", strings.Repeat("t", 26), new(false)
+			mm.users = registeredBotUsers()
+			source := &publicAudienceSource{accessSource: mm, team: []string{mm.bot, mm.posts[0].UserID, outside, registeredBotOne, registeredBotTwo}, revision: "full-team-1"}
+			slices.Sort(source.team)
+			e.MM = source
+			root := corporateStateBinding(w, key.Channel)
+			e.Config.Workflows[0] = root
+			var err error
+			w, err = root.ForChat(key.Channel)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = e.Thread(t.Context(), w, key, mm.channel, true); err != nil || len(api.attempts) != 1 {
+				t.Fatal("public team admission failed", err)
+			}
+			const answer = "PUBLIC_TEAM_CONFIRMED_ANSWER"
+			session := &api.snapshot.Sessions[0]
+			run := &session.Runs[0]
+			run.Status, run.FinalMessageID = "completed", "final"
+			session.Messages = append(session.Messages, conversation.Message{ID: "final", RunID: run.ID, Role: "assistant", Kind: "answer", Position: 1, Text: answer})
+			switch change {
+			case "reader left":
+				source.team = slices.DeleteFunc(source.team, func(id string) bool { return id == outside })
+			case "revision changed":
+				source.revision = "full-team-2"
+			case "team changed":
+				mm.channel.TeamID = strings.Repeat("u", 26)
+			case "channel became private":
+				mm.channel.Type = "P"
+			}
+			for range 2 {
+				_ = e.Thread(t.Context(), w, key, mm.channel, true)
+			}
+			published := 0
+			for _, post := range mm.posts {
+				if strings.Contains(post.Message, answer) {
+					published++
+				}
+			}
+			want := 0
+			if change == "unchanged" {
+				want = 1
+			}
+			if published != want {
+				t.Fatalf("published %d answers, want %d", published, want)
+			}
+		})
+	}
+}
+
 // Human account confirmation cannot attest to a bot's current registration.
 // A separate trusted recipient decision must remain fresh through publication.
 func TestRegisteredBotPublicationRechecksTrustedRegistryWithoutConfigChange(t *testing.T) {

@@ -229,6 +229,11 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 			if _, _, err = projectAccess(*w.Access, audience, env.AccessContext.Subject.ID); err != nil {
 				return err
 			}
+			if w.AgentID != "" && w.PublicTeamAudience && len(w.Access.BotRecipients) > 0 {
+				if err = e.confirmPublicBotOutput(ctx, env, p.Key); err != nil {
+					return err
+				}
+			}
 			if w.OrdinaryUse() && !slices.Equal(audience, env.AccessProof.AudienceSubjects) {
 				return errWithholdOutput
 			}

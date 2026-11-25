@@ -131,6 +131,30 @@ func (e *Engine) confirmCorporate(ctx context.Context, a agentcontract.Assignmen
 	}
 	return nil
 }
+
+// confirmPublicBotOutput reuses the exact corporate audience confirmation at
+// publication. The assignment is historical: authenticate its witness at its
+// observation time, then obtain fresh audience and registry evidence below.
+func (e *Engine) confirmPublicBotOutput(ctx context.Context, env conversation.Envelope, key conversation.Key) error {
+	ch, err := e.MM.Channel(ctx, key.Channel)
+	if err != nil {
+		return err
+	}
+	if ch.Type != "O" && env.AccessProof.Audience != nil && env.AccessProof.Audience.ChannelType != "O" {
+		return nil
+	}
+	if env.AccessContext.Assignment == nil {
+		return errWithholdOutput
+	}
+	a, err := agentcontract.Decode(*env.AccessContext.Assignment)
+	if err != nil || a.Verify(os.Getenv("ORPHEUS_AUDIENCE_SECRET"), a.Confirmation.ObservedAt) != nil ||
+		a.InvocationID != env.AccessContext.InvocationID || a.Delivery.Source != env.Source ||
+		a.Delivery.Chat != env.Channel || a.Delivery.Thread != env.Root || a.Delivery.Message != env.Anchor {
+		return errWithholdOutput
+	}
+	return e.confirmCorporate(ctx, a)
+}
+
 func (e *Engine) corporateHandler() http.Handler {
 	return agentcontract.Handler(func() string { return os.Getenv("ORPHEUS_AUDIENCE_SECRET") }, e.confirmExternal)
 }
