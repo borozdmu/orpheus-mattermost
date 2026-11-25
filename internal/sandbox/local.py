@@ -47,10 +47,13 @@ def retire_output(parent):
         # without following it so one bad entry cannot block every later run.
         os.rename('previous-runs', 'previous-runs.displaced-' + uuid.uuid4().hex[:8], src_dir_fd=parent, dst_dir_fd=parent)
         archive = directory(parent, 'previous-runs')
+    name = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()) + '-' + uuid.uuid4().hex[:8]
     try:
         # rename never follows a link planted by the agent; the name is unique per call.
-        os.rename('files', time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()) + '-' + uuid.uuid4().hex[:8],
-                  src_dir_fd=parent, dst_dir_fd=archive)
+        os.rename('files', name, src_dir_fd=parent, dst_dir_fd=archive)
+    except OSError:
+        # An unwritable archive must not block later runs: retire beside it instead.
+        os.rename('files', 'files.retired-' + name, src_dir_fd=parent, dst_dir_fd=parent)
     finally:
         os.close(archive)
 

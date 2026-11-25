@@ -221,7 +221,7 @@ agent's own names (no path separators or leading dot, unique, up to 10 MB each).
 Choose it only with a relay that validates formats itself and for an audience
 entitled to the full documents. Existing bot receipts
 prevent duplicate uploads after reconciliation. Incomplete exports are not
-published. Transport secrets and original inputs never enter this output path.
+published. Transport secrets and original Mattermost input files never enter this output path. A run keeps the `local_files_original` value accepted with its input, also after reconciliation or transfer.
 
 The accepted input freezes whether the run exports local files. Reconciliation
 also recognizes the exact pinned local export hook in immutable session history

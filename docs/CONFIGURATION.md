@@ -456,8 +456,10 @@ owner policy. This mode does not request provider-issued credentials.
 
 `continue_thread_sessions: true` lets a `local_provider_context` binding keep one
 session per thread. With `local_files`, the pinned prepare hook moves the exporter's
-`files/` folder to `previous-runs/<UTC time>-<id>/` before every run, so each export
-publishes only files written during that run:
+`files/` folder to `previous-runs/<UTC time>-<id>/` (or `files.retired-<…>` if the
+archive is unwritable) before every run, so an export never republishes files that
+existed when the run started. A background process that survived the pause can
+still write into the new `files/`; this is not a security boundary:
 
 | | Default | `continue_thread_sessions` |
 | --- | --- | --- |

@@ -148,6 +148,23 @@ class LocalTools(unittest.TestCase):
                     else:
                         import shutil;shutil.rmtree(p)
 
+    def test_unwritable_archive_cannot_block_later_runs(self):
+        output = self.exporter()
+        (output / 'previous-runs').mkdir(parents=True)
+        (output / 'files').mkdir()
+        (output / 'files/new.csv').write_text('a')
+        real = os.rename
+        def rename(src, dst, *, src_dir_fd=None, dst_dir_fd=None):
+            if src_dir_fd != dst_dir_fd:
+                raise PermissionError(13, 'synthetic unwritable archive')
+            return real(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
+        with patch.dict(os.environ, self.env, clear=True), patch.object(local.os, 'rename', rename):
+            local.prepare()
+        self.assertFalse((output / 'files').exists())
+        retired = [p for p in output.iterdir() if p.name.startswith('files.retired-')]
+        self.assertEqual(len(retired), 1)
+        self.assertEqual((retired[0] / 'new.csv').read_text(), 'a')
+
     def test_non_exporting_tool_keeps_its_files(self):
         (self.root / '.agent-memory/files').mkdir(parents=True)
         with patch.dict(os.environ, self.env, clear=True):
