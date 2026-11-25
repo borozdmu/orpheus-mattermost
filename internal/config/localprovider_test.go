@@ -51,20 +51,20 @@ func TestLocalProviderScopeValidation(t *testing.T) {
 }
 
 func TestContinueThreadSessionsValidationAndRevision(t *testing.T) {
-	for _, scenario := range []string{"valid", "no provider context", "ordinary use", "local files"} {
+	for _, scenario := range []string{"valid", "no provider context", "ordinary use", "valid with local files"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, w := localProviderWorkflow(t)
 			w.Access.LocalFiles = false
 			w.Access.ContinueThreadSessions = true
 			switch scenario {
-			case "local files":
+			case "valid with local files":
 				w.Access.LocalFiles = true
 			case "no provider context":
 				w.Access.LocalProviderContext = false
 			case "ordinary use":
 				w.Access = &Access{OrdinaryAgentUse: true, ChannelOnly: true, ContinueThreadSessions: true, Namespace: w.Access.Namespace, BotID: w.Access.BotID}
 			}
-			if err := c.validate(); (err == nil) != (scenario == "valid") {
+			if err := c.validate(); (err == nil) != strings.HasPrefix(scenario, "valid") {
 				t.Fatalf("validation: %v", err)
 			}
 		})
@@ -139,6 +139,32 @@ func TestLocalBeforeRunPythonValidationAndRevision(t *testing.T) {
 	}
 	raw, err = json.Marshal(Access{})
 	if err != nil || strings.Contains(string(raw), "local_provider_context") {
+		t.Fatal("default changes serialized access", err)
+	}
+}
+
+func TestLocalFilesOriginalRequiresLocalFiles(t *testing.T) {
+	c, w := localProviderWorkflow(t)
+	w.Access.LocalFiles = true
+	w.Access.LocalFilesOriginal = true
+	if err := c.validate(); err != nil {
+		t.Fatal(err)
+	}
+	withOriginal := w.EffectiveRevision
+	w.Access.LocalFilesOriginal = false
+	if err := c.validate(); err != nil {
+		t.Fatal(err)
+	}
+	if withOriginal == w.EffectiveRevision {
+		t.Fatal("output mode change retained old session revision")
+	}
+	w.Access.LocalFiles = false
+	w.Access.LocalFilesOriginal = true
+	if err := c.validate(); err == nil {
+		t.Fatal("original files accepted without local export")
+	}
+	raw, err := json.Marshal(Access{})
+	if err != nil || strings.Contains(string(raw), "local_files_original") {
 		t.Fatal("default changes serialized access", err)
 	}
 }

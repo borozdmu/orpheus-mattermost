@@ -20,6 +20,10 @@ import (
 var localArtifactPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var localNamePattern = regexp.MustCompile(`^document-[0-9]{2}\.text-version\.(txt|docx|xlsx|pdf)$`)
 
+// localOriginalNamePattern admits the agent's own file names for workflows whose
+// relay verifies and passes original documents: no separators, no leading dot.
+var localOriginalNamePattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} ._()+-]{0,119}\.(xlsx|docx|pdf|csv|txt|md)$`)
+
 type localOutputSource interface {
 	Upload(context.Context, string, string, io.Reader) (mattermost.FileInfo, error)
 }
@@ -34,16 +38,16 @@ type localManifest struct {
 
 // localOutput consumes only a sealed, locally approved derivative. The model has
 // neither the Mattermost token nor a file-upload capability for that channel.
-func (e *Engine) localOutput(ctx context.Context, p *delivery.Publisher, s conversation.Session, r conversation.Run, env conversation.Envelope) (attachments.Output, error) {
+func (e *Engine) localOutput(ctx context.Context, p *delivery.Publisher, s conversation.Session, r conversation.Run, env conversation.Envelope, original bool) (attachments.Output, error) {
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", "/run/orpheus-output/output.sock")
 	}}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	return e.projectLocalOutput(ctx, p, s, r, env, client)
+	return e.projectLocalOutput(ctx, p, s, r, env, client, original)
 }
 
-func (e *Engine) projectLocalOutput(ctx context.Context, p *delivery.Publisher, s conversation.Session, r conversation.Run, env conversation.Envelope, client *http.Client) (attachments.Output, error) {
+func (e *Engine) projectLocalOutput(ctx context.Context, p *delivery.Publisher, s conversation.Session, r conversation.Run, env conversation.Envelope, client *http.Client, original bool) (attachments.Output, error) {
 	output := attachments.Output{Files: []attachments.Artifact{}}
 	upload, ok := e.MM.(localOutputSource)
 	if !ok || p.BeforeCreate == nil {
@@ -90,12 +94,17 @@ func (e *Engine) projectLocalOutput(ctx context.Context, p *delivery.Publisher, 
 	if json.Unmarshal(raw, &manifest) != nil || manifest.Schema != 1 || manifest.SessionID != s.ID || manifest.RunID != r.ID || manifest.Stage != "sealed" || len(manifest.Files) > min(env.Request.Limits.MaxOutputFiles, 15) {
 		return output, errors.New("invalid local manifest")
 	}
-	seen := map[string]bool{}
+	names, maxSize := localNamePattern, int64(4<<20)
+	if original {
+		names, maxSize = localOriginalNamePattern, 10<<20
+	}
+	seen, seenNames := map[string]bool{}, map[string]bool{}
 	for _, artifact := range manifest.Files {
-		if !localArtifactPattern.MatchString(artifact.ArtifactID) || !localArtifactPattern.MatchString(artifact.SHA256) || !localNamePattern.MatchString(artifact.Name) || artifact.FileID != "" || artifact.Path != "" || seen[artifact.ArtifactID] || artifact.Size < 0 || artifact.Size > min(env.Request.Limits.MaxOutputBytes, 4<<20) {
+		if !localArtifactPattern.MatchString(artifact.ArtifactID) || !localArtifactPattern.MatchString(artifact.SHA256) || !names.MatchString(artifact.Name) || artifact.FileID != "" || artifact.Path != "" || seen[artifact.ArtifactID] || seenNames[artifact.Name] || artifact.Size < 0 || artifact.Size > min(env.Request.Limits.MaxOutputBytes, maxSize) {
 			return output, errors.New("invalid local artifact")
 		}
 		seen[artifact.ArtifactID] = true
+		seenNames[artifact.Name] = true
 	}
 	// Validate every descriptor before uploading any file; publication remains all-or-nothing.
 	for _, artifact := range manifest.Files {

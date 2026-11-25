@@ -70,26 +70,28 @@ func (k Key) Invocation(anchor string) uuid.UUID {
 }
 
 type Envelope struct {
-	LocalFiles    bool                `json:"local_files,omitzero"`
-	AccessContext *api.AccessContext  `json:"access_context,omitzero"`
-	AccessProof   *AccessProof        `json:"access_proof,omitzero"`
-	ContextStart  *ContextStart       `json:"context_start,omitzero"`
-	InputSubjects []api.AccessSubject `json:"input_subjects,omitzero"`
-	Schema        int                 `json:"schema"`
-	Source        string              `json:"source"`
-	Workflow      string              `json:"workflow"`
-	Revision      string              `json:"revision"`
-	Channel       string              `json:"channel"`
-	Root          string              `json:"root"`
-	Anchor        string              `json:"anchor"`
-	WindowEnd     int64               `json:"window_end"`
-	Kind          string              `json:"submission_kind"`
-	TriggerIDs    []string            `json:"trigger_post_ids"`
-	ContextIDs    []string            `json:"context_post_ids"`
-	Versions      []Version           `json:"versions"`
-	Request       attachments.Request `json:"input"`
-	Render        Render              `json:"render"`
-	Predecessor   string              `json:"predecessor,omitempty"`
+	LocalFiles bool `json:"local_files,omitzero"`
+	// LocalFilesOriginal freezes whether the run publishes the relay's original documents.
+	LocalFilesOriginal bool                `json:"local_files_original,omitzero"`
+	AccessContext      *api.AccessContext  `json:"access_context,omitzero"`
+	AccessProof        *AccessProof        `json:"access_proof,omitzero"`
+	ContextStart       *ContextStart       `json:"context_start,omitzero"`
+	InputSubjects      []api.AccessSubject `json:"input_subjects,omitzero"`
+	Schema             int                 `json:"schema"`
+	Source             string              `json:"source"`
+	Workflow           string              `json:"workflow"`
+	Revision           string              `json:"revision"`
+	Channel            string              `json:"channel"`
+	Root               string              `json:"root"`
+	Anchor             string              `json:"anchor"`
+	WindowEnd          int64               `json:"window_end"`
+	Kind               string              `json:"submission_kind"`
+	TriggerIDs         []string            `json:"trigger_post_ids"`
+	ContextIDs         []string            `json:"context_post_ids"`
+	Versions           []Version           `json:"versions"`
+	Request            attachments.Request `json:"input"`
+	Render             Render              `json:"render"`
+	Predecessor        string              `json:"predecessor,omitempty"`
 }
 
 func (e Envelope) Key() Key                { return Key{e.Source, e.Workflow, e.Channel, e.Root} }

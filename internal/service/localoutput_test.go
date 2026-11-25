@@ -95,7 +95,7 @@ func TestLocalOutputPublicationAndRestart(t *testing.T) {
 			})}
 			env := conversation.Envelope{Channel: "channel", Request: attachments.Request{Limits: config.Files{MaxOutputFiles: 15, MaxOutputBytes: 4 << 20}}}
 			session := conversation.Session{ID: sid}
-			out, err := e.projectLocalOutput(t.Context(), p, session, run, env, client)
+			out, err := e.projectLocalOutput(t.Context(), p, session, run, env, client, false)
 			if scenario != "success" {
 				if err == nil || mm.uploads != 0 {
 					t.Fatal("unsafe output uploaded", err, mm.uploads)
@@ -118,7 +118,7 @@ func TestLocalOutputPublicationAndRestart(t *testing.T) {
 			if err := recovered.Refresh(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			if _, err = e.projectLocalOutput(t.Context(), recovered, session, run, env, client); err != nil {
+			if _, err = e.projectLocalOutput(t.Context(), recovered, session, run, env, client, false); err != nil {
 				t.Fatal(err)
 			}
 			if mm.uploads != 1 || mm.calls != 1 || gates != 2 {
@@ -178,5 +178,76 @@ func TestFrozenLocalExportCannotBeDisabledByWorkflow(t *testing.T) {
 				t.Fatal("incomplete frozen export bypassed the publication guard", metadataFlag, currentFlag, err)
 			}
 		}
+	}
+}
+
+func TestLocalOutputOriginalNamesOnlyWhenSelected(t *testing.T) {
+	cases := []struct {
+		name     string
+		original bool
+		ok       bool
+	}{
+		{"MQL_2026.xlsx", true, true},
+		{"Отчёт по лидам (ноябрь).xlsx", true, true},
+		{"document-01.text-version.xlsx", true, true},
+		{"MQL_2026.xlsx", false, false},
+		{"document-01.text-version.xlsx", false, true},
+		{".hidden.xlsx", true, false},
+		{"../escape.xlsx", true, false},
+		{"dir/report.xlsx", true, false},
+		{"macro.xlsm", true, false},
+		{"script.sh", true, false},
+		{strings.Repeat("a", 121) + ".csv", true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			data := []byte("synthetic table")
+			sid, rid := "session", "run"
+			file := attachments.Artifact{ArtifactID: strings.Repeat("b", 64), Name: c.name, SHA256: attachments.Hash(data), Size: int64(len(data))}
+			manifest := localManifest{Schema: 1, SessionID: sid, RunID: rid, Stage: "sealed", Files: []attachments.Artifact{file}}
+			run := conversation.Run{ID: rid, Status: "completed", Hooks: []conversation.Hook{{Name: "after_run", Status: "completed", Completeness: "complete"}}}
+			mm := &localUploadMM{fakeSource: &fakeSource{bot: "bot"}}
+			e := &Engine{MM: mm}
+			p := &delivery.Publisher{MM: mm, BotID: "bot", Key: conversation.Key{Source: "source", Workflow: "dev", Channel: "channel", Root: "root"}, BeforeCreate: func(context.Context) error { return nil }}
+			client := &http.Client{Transport: localRoundTrip(func(req *http.Request) (*http.Response, error) {
+				b := data
+				if req.URL.Path == "/manifest" {
+					b, _ = json.Marshal(manifest)
+				}
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(b)), Header: make(http.Header)}, nil
+			})}
+			env := conversation.Envelope{Channel: "channel", Request: attachments.Request{Limits: config.Files{MaxOutputFiles: 15, MaxOutputBytes: 30 << 20}}}
+			out, err := e.projectLocalOutput(t.Context(), p, conversation.Session{ID: sid}, run, env, client, c.original)
+			if (err == nil) != c.ok || c.ok && (len(out.Files) != 1 || out.Files[0].Name != c.name) || !c.ok && mm.uploads != 0 {
+				t.Fatal("unexpected name policy", err, out, mm.uploads)
+			}
+		})
+	}
+}
+
+func TestLocalOutputOriginalLimitsAndDuplicateNames(t *testing.T) {
+	for _, scenario := range []string{"duplicate name", "too large"} {
+		t.Run(scenario, func(t *testing.T) {
+			sid, rid := "session", "run"
+			files := []attachments.Artifact{{ArtifactID: strings.Repeat("c", 64), Name: "a.xlsx", SHA256: strings.Repeat("d", 64), Size: 1}}
+			if scenario == "duplicate name" {
+				files = append(files, attachments.Artifact{ArtifactID: strings.Repeat("e", 64), Name: "a.xlsx", SHA256: strings.Repeat("d", 64), Size: 1})
+			} else {
+				files[0].Size = (10 << 20) + 1
+			}
+			manifest := localManifest{Schema: 1, SessionID: sid, RunID: rid, Stage: "sealed", Files: files}
+			run := conversation.Run{ID: rid, Status: "completed", Hooks: []conversation.Hook{{Name: "after_run", Status: "completed", Completeness: "complete"}}}
+			mm := &localUploadMM{fakeSource: &fakeSource{bot: "bot"}}
+			e := &Engine{MM: mm}
+			p := &delivery.Publisher{MM: mm, BotID: "bot", Key: conversation.Key{Source: "source", Workflow: "dev", Channel: "channel", Root: "root"}, BeforeCreate: func(context.Context) error { return nil }}
+			client := &http.Client{Transport: localRoundTrip(func(*http.Request) (*http.Response, error) {
+				b, _ := json.Marshal(manifest)
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(b)), Header: make(http.Header)}, nil
+			})}
+			env := conversation.Envelope{Channel: "channel", Request: attachments.Request{Limits: config.Files{MaxOutputFiles: 15, MaxOutputBytes: 30 << 20}}}
+			if _, err := e.projectLocalOutput(t.Context(), p, conversation.Session{ID: sid}, run, env, client, true); err == nil || mm.uploads != 0 {
+				t.Fatal("invalid original output accepted", err, mm.uploads)
+			}
+		})
 	}
 }

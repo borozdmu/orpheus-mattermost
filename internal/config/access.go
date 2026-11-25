@@ -20,16 +20,20 @@ type Access struct {
 	// ContinueThreadSessions lets a local-provider binding continue its thread
 	// session. Admission, input projection and the core's scope check still run
 	// for every mention; a changed scope starts a clean session.
-	ContinueThreadSessions bool               `yaml:"continue_thread_sessions,omitempty" json:"continue_thread_sessions,omitempty"`
-	LocalFiles             bool               `yaml:"local_files,omitempty" json:"local_files,omitempty"`
-	ChannelOnly            bool               `yaml:"channel_only,omitempty" json:"channel_only,omitempty"`
-	LocalServices          bool               `yaml:"local_services,omitempty" json:"local_services,omitempty"`
-	Peer                   *PeerRecipient     `yaml:"peer_recipient,omitempty" json:"peer_recipient,omitempty"`
-	BotRecipients          []BotRecipient     `yaml:"bot_recipients,omitempty" json:"bot_recipients,omitempty"`
-	Namespace              string             `yaml:"namespace" json:"namespace"`
-	BotID                  string             `yaml:"bot_id" json:"bot_id"`
-	ScopeContext           map[string]any     `yaml:"scope_context" json:"scope_context"`
-	IdentityProjection     IdentityProjection `yaml:"identity_projection" json:"identity_projection"`
+	ContinueThreadSessions bool `yaml:"continue_thread_sessions,omitempty" json:"continue_thread_sessions,omitempty"`
+	LocalFiles             bool `yaml:"local_files,omitempty" json:"local_files,omitempty"`
+	// LocalFilesOriginal accepts the relay's verified original documents under the
+	// agent's file names instead of text derivatives. Choose it only for a relay
+	// that validates formats itself and for audiences entitled to the full files.
+	LocalFilesOriginal bool               `yaml:"local_files_original,omitempty" json:"local_files_original,omitempty"`
+	ChannelOnly        bool               `yaml:"channel_only,omitempty" json:"channel_only,omitempty"`
+	LocalServices      bool               `yaml:"local_services,omitempty" json:"local_services,omitempty"`
+	Peer               *PeerRecipient     `yaml:"peer_recipient,omitempty" json:"peer_recipient,omitempty"`
+	BotRecipients      []BotRecipient     `yaml:"bot_recipients,omitempty" json:"bot_recipients,omitempty"`
+	Namespace          string             `yaml:"namespace" json:"namespace"`
+	BotID              string             `yaml:"bot_id" json:"bot_id"`
+	ScopeContext       map[string]any     `yaml:"scope_context" json:"scope_context"`
+	IdentityProjection IdentityProjection `yaml:"identity_projection" json:"identity_projection"`
 }
 
 // LocalPolicy keeps input processing and authorization on the connector host.
@@ -132,7 +136,7 @@ func (id *SubjectID) UnmarshalYAML(node *yaml.Node) error {
 func (a Access) Validate() error {
 	if a.OrdinaryAgentUse {
 		if !a.ChannelOnly || !accessNamePattern.MatchString(a.Namespace) || !ValidID(a.BotID) ||
-			a.Peer != nil || a.LocalFiles || a.LocalServices || a.LocalProviderContext || a.ContinueThreadSessions || a.VerifyAccountCards ||
+			a.Peer != nil || a.LocalFiles || a.LocalFilesOriginal || a.LocalServices || a.LocalProviderContext || a.ContinueThreadSessions || a.VerifyAccountCards ||
 			len(a.ScopeContext) != 0 || a.IdentityProjection.ActorField != "" || a.IdentityProjection.AudienceField != "" || len(a.IdentityProjection.Subjects) != 0 {
 			return errors.New("ordinary agent use requires only an isolated transport namespace and its own bot")
 		}
@@ -144,10 +148,13 @@ func (a Access) Validate() error {
 			return errors.New("local provider context requires a registered space pinned to the verified peer")
 		}
 	}
-	if a.ContinueThreadSessions && (!a.LocalProviderContext || a.LocalFiles) {
-		// Local file export publishes the whole output folder of the run's sandbox;
-		// a continued sandbox would publish earlier runs' files again.
-		return errors.New("thread session continuation requires local provider context without local files")
+	if a.ContinueThreadSessions && !a.LocalProviderContext {
+		// Local file export stays per run: the pinned prepare hook moves earlier
+		// results out of the exporter's folder before each run of a continued sandbox.
+		return errors.New("thread session continuation requires local provider context")
+	}
+	if a.LocalFilesOriginal && !a.LocalFiles {
+		return errors.New("original local files require local files")
 	}
 	if a.LocalFiles && !a.LocalServices {
 		return errors.New("local files require local services")
