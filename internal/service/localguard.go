@@ -85,7 +85,7 @@ func policyReason(status int, bodyReader io.Reader, audience []string, binding *
 		ids := slices.Clone(reason.IDs)
 		slices.Sort(ids)
 		for i, id := range ids {
-			if !config.ValidID(id) || !slices.Contains(audience, id) || id == binding.BotID || binding.Peer != nil && id == binding.Peer.ID || i > 0 && id == ids[i-1] {
+			if !config.ValidID(id) || !slices.Contains(audience, id) || id == binding.BotID || binding.ReceiveOnly(id) || i > 0 && id == ids[i-1] {
 				return &audienceDenial{code: fallback}
 			}
 		}

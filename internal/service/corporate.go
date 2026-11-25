@@ -19,12 +19,23 @@ func corporateReaders(w config.Workflow, roster []string) ([]agentcontract.Princ
 	if w.Access == nil {
 		return nil, errors.New("corporate audience missing")
 	}
+	if err := w.Access.Validate(); err != nil {
+		return nil, err
+	}
 	for _, id := range roster {
 		if id == w.Access.BotID {
 			continue
 		}
 		mapped, ok := w.Access.IdentityProjection.Subjects[id]
 		botID := ""
+		if bot := w.Access.RegisteredBot(id); bot != nil {
+			mapped, ok = bot.OwnerUserID, true
+			rawBot, err := bot.BotID.MarshalJSON()
+			if err != nil {
+				return nil, err
+			}
+			botID = strings.Trim(string(rawBot), "\"")
+		}
 		if peer := w.Access.Peer; peer != nil && peer.ID == id && len(peer.BotID) > 0 && len(peer.OwnerUserID) > 0 {
 			mapped, ok = peer.OwnerUserID, true
 			rawBot, err := peer.BotID.MarshalJSON()

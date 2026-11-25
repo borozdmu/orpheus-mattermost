@@ -131,7 +131,7 @@ func (r *Runtime) event(event mattermost.Event) {
 	r.notify()
 }
 func candidate(p mattermost.Post, ch mattermost.Channel, w config.Workflow, bot mattermost.User) bool {
-	if p.DeleteAt != 0 || p.UserID == bot.ID || strings.HasPrefix(p.Type, "system_") || p.CreateAt < w.Since.UnixMilli() {
+	if p.DeleteAt != 0 || p.UserID == bot.ID || w.Access.ReceiveOnly(p.UserID) || strings.HasPrefix(p.Type, "system_") || p.CreateAt < w.Since.UnixMilli() {
 		return false
 	}
 	if strings.TrimSpace(p.Message) == "" && len(p.FileIDs) == 0 {

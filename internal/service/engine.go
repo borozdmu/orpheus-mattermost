@@ -217,7 +217,7 @@ func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversat
 		}()
 		p.BeforeCreate = func(ctx context.Context) error {
 			if err := validateProtectedContext(env, w); err != nil {
-				if w.Access.Peer != nil || w.Access.LocalPolicy() {
+				if w.Access.Peer != nil || len(w.Access.BotRecipients) > 0 || w.Access.LocalPolicy() {
 					return err
 				}
 				return errWithholdOutput
