@@ -51,11 +51,14 @@ func TestLocalProviderScopeValidation(t *testing.T) {
 }
 
 func TestContinueThreadSessionsValidationAndRevision(t *testing.T) {
-	for _, scenario := range []string{"valid", "no provider context", "ordinary use"} {
+	for _, scenario := range []string{"valid", "no provider context", "ordinary use", "local files"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, w := localProviderWorkflow(t)
+			w.Access.LocalFiles = false
 			w.Access.ContinueThreadSessions = true
 			switch scenario {
+			case "local files":
+				w.Access.LocalFiles = true
 			case "no provider context":
 				w.Access.LocalProviderContext = false
 			case "ordinary use":
@@ -67,6 +70,7 @@ func TestContinueThreadSessionsValidationAndRevision(t *testing.T) {
 		})
 	}
 	c, w := localProviderWorkflow(t)
+	w.Access.LocalFiles = false
 	if err := c.validate(); err != nil {
 		t.Fatal(err)
 	}

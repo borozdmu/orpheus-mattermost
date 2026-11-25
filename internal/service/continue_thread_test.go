@@ -124,6 +124,9 @@ func TestLocalProviderThreadContinuesOnlyWithFlag(t *testing.T) {
 			if *admissions <= firstAdmissions || *projections <= firstProjections {
 				t.Fatal("host admission or local projection skipped on the second mention")
 			}
+			if second.Envelope.AccessContext == nil || second.Envelope.AccessContext.InvocationID == a.attempts[0].Envelope.AccessContext.InvocationID {
+				t.Fatal("second mention reused the first admission")
+			}
 			if len(second.Envelope.Request.Files) != 0 {
 				t.Fatal("original files reached the sandbox")
 			}
