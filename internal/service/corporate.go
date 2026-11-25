@@ -14,10 +14,15 @@ import (
 	"github.com/orpheus-agents/orpheus/agentcontract"
 )
 
+var publicBotOutputNow = time.Now
+
 func corporateReaders(w config.Workflow, roster []string) ([]agentcontract.Principal, error) {
 	var readers []agentcontract.Principal
 	if w.Access == nil {
 		return nil, errors.New("corporate audience missing")
+	}
+	if err := w.Access.Validate(); err != nil {
+		return nil, err
 	}
 	for _, id := range roster {
 		if id == w.Access.BotID {
@@ -25,6 +30,14 @@ func corporateReaders(w config.Workflow, roster []string) ([]agentcontract.Princ
 		}
 		mapped, ok := w.Access.IdentityProjection.Subjects[id]
 		botID := ""
+		if bot := w.Access.RegisteredBot(id); bot != nil {
+			mapped, ok = bot.OwnerUserID, true
+			rawBot, err := bot.BotID.MarshalJSON()
+			if err != nil {
+				return nil, err
+			}
+			botID = strings.Trim(string(rawBot), "\"")
+		}
 		if peer := w.Access.Peer; peer != nil && peer.ID == id && len(peer.BotID) > 0 && len(peer.OwnerUserID) > 0 {
 			mapped, ok = peer.OwnerUserID, true
 			rawBot, err := peer.BotID.MarshalJSON()
@@ -120,6 +133,54 @@ func (e *Engine) confirmCorporate(ctx context.Context, a agentcontract.Assignmen
 	}
 	return nil
 }
+
+// confirmPublicBotOutput authenticates the historical assignment and compares it
+// with this publication's fresh roster, policy and final audience observation.
+func (e *Engine) confirmPublicBotOutput(ctx context.Context, env conversation.Envelope, key conversation.Key, roster []string, observed time.Time) error {
+	ch, err := e.MM.Channel(ctx, key.Channel)
+	if err != nil {
+		return err
+	}
+	if ch.Type != "O" && env.AccessProof.Audience != nil && env.AccessProof.Audience.ChannelType != "O" {
+		return nil
+	}
+	if env.AccessContext.Assignment == nil {
+		return errWithholdOutput
+	}
+	a, err := agentcontract.Decode(*env.AccessContext.Assignment)
+	if err != nil || a.Verify(os.Getenv("ORPHEUS_AUDIENCE_SECRET"), a.Confirmation.ObservedAt) != nil ||
+		!a.Confirmation.ObservedAt.Equal(env.AccessContext.ContextObservedAt) ||
+		a.Author.ID != env.AccessContext.Subject.ID || a.Author.Namespace != env.AccessContext.Subject.Namespace ||
+		a.InvocationID != env.AccessContext.InvocationID || a.Delivery.Source != env.Source ||
+		a.Delivery.Source != e.SourceID || a.Delivery.Connector != "mattermost" ||
+		a.Delivery.Chat != env.Channel || a.Delivery.Thread != env.Root || a.Delivery.Message != env.Anchor {
+		return errWithholdOutput
+	}
+	e.corporateMu.RLock()
+	cfg := e.Config
+	if e.corporateConfig != nil {
+		cfg = *e.corporateConfig
+	}
+	w, err := cfg.Route(key.Channel, a.Audience.ChannelType)
+	e.corporateMu.RUnlock()
+	if err != nil || w == nil || w.Draining || w.Access == nil || !w.Access.VerifyAccountCards || validateProtectedContext(env, *w) != nil {
+		return errWithholdOutput
+	}
+	copy := a
+	copy.Agent, copy.Confirmation.Revision = w.AgentID, w.EffectiveRevision
+	copy.ProviderContext = env.AccessContext.ScopeContext
+	copy.Readers, err = corporateReaders(*w, roster)
+	if err != nil {
+		return errWithholdOutput
+	}
+	copy.Audience, err = e.describeAudience(ctx, *w, key, roster)
+	now := publicBotOutputNow()
+	if err != nil || observed.IsZero() || observed.After(now) || now.Sub(observed) >= time.Minute || a.Confirmation.ObservedAt.After(now) || copy.Digest() != a.Digest() {
+		return errWithholdOutput
+	}
+	return nil
+}
+
 func (e *Engine) corporateHandler() http.Handler {
 	return agentcontract.Handler(func() string { return os.Getenv("ORPHEUS_AUDIENCE_SECRET") }, e.confirmExternal)
 }

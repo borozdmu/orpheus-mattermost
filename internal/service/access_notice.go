@@ -89,7 +89,7 @@ func (e *Engine) accessNotice(ctx context.Context, w config.Workflow, p *deliver
 			return nil, "", err
 		}
 		for _, who := range authors {
-			if !slices.Contains(aud, who) || who == e.Bot.ID || w.Access.Peer != nil && who == w.Access.Peer.ID {
+			if !slices.Contains(aud, who) || who == e.Bot.ID || w.Access.ReceiveOnly(who) {
 				return nil, "", errNoticeChanged
 			}
 		}

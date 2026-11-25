@@ -32,7 +32,7 @@ func confirmAccountCards(ctx context.Context, access *config.Access, roster []st
 		if id == access.BotID {
 			continue
 		}
-		if access.Peer != nil && id == access.Peer.ID {
+		if access.ReceiveOnly(id) {
 			continue
 		}
 		mapped, ok := access.IdentityProjection.Subjects[id]
@@ -44,14 +44,39 @@ func confirmAccountCards(ctx context.Context, access *config.Access, roster []st
 	if len(accounts) == 0 {
 		return denied
 	}
+	return confirmDirectory(ctx, "external.confirm_audience", map[string]any{"provider": "mattermost", "agent_key": agent, "accounts": accounts})
+}
+
+// Configuration is not proof that a receive-only bot is still registered and
+// authorized. This separate capability must be supported by the trusted Provider.
+func confirmBotRecipients(ctx context.Context, access *config.Access, roster []string) error {
+	if access == nil || len(access.BotRecipients) == 0 {
+		return nil
+	}
+	if err := access.Validate(); err != nil {
+		return err
+	}
+	bots := map[string]botOwnership{}
+	for _, id := range roster {
+		if bot := access.RegisteredBot(id); bot != nil {
+			bots[id] = botOwnership{bot.BotID, bot.OwnerUserID}
+		}
+	}
+	if len(bots) == 0 {
+		return nil
+	}
+	return confirmDirectory(ctx, "external.confirm_bot_audience", map[string]any{"provider": "mattermost", "agent_key": access.ScopeContext["agent_id"], "bots": bots})
+}
+
+func confirmDirectory(ctx context.Context, method string, params any) error {
+	denied := errors.New("account directory did not confirm this audience")
 	address, err := accountDirectoryURL(sharedProviderDirectory)
 	token := os.Getenv("ORPHEUS_ACCOUNT_DIRECTORY_TOKEN")
 	if err != nil || len(token) < 32 || strings.ContainsAny(token, "\r\n") {
 		return denied
 	}
 	id := uuid.NewString()
-	data, err := json.Marshal(map[string]any{"request_id": id, "method": "external.confirm_audience",
-		"params": map[string]any{"provider": "mattermost", "agent_key": agent, "accounts": accounts}})
+	data, err := json.Marshal(map[string]any{"request_id": id, "method": method, "params": params})
 	if err != nil {
 		return denied
 	}

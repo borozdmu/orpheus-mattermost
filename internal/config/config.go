@@ -405,8 +405,11 @@ func (c *Config) validate() error {
 			return errors.New("local before-run Python requires local services and at most 64 KiB without NUL")
 		}
 		if a := w.Access; a != nil {
-			if a.Peer != nil && slices.Contains(w.TriggerBotIDs, a.Peer.ID) {
-				return errors.New("protected peer recipient cannot trigger runs")
+			if slices.ContainsFunc(w.TriggerBotIDs, a.ReceiveOnly) {
+				return errors.New("protected receive-only recipient cannot trigger runs")
+			}
+			if len(a.BotRecipients) > 0 && (w.AgentID == "" || a.ScopeContext["agent_id"] != w.AgentID) {
+				return errors.New("registered bot recipients require the matching corporate agent")
 			}
 			if err := a.Validate(); err != nil {
 				return err

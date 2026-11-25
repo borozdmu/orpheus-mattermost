@@ -329,7 +329,48 @@ active bot, the execution bot, and exactly the mapped humans. The provider
 must validate the peer ID in the named field before granting any data scope.
 The peer has no input or trigger authority. No role or display-name fallback is used.
 
-The confirmed Mattermost audience, excluding any receive-only peer, remains
+Corporate roles with several registered receive-only bots use a separate
+`bot_recipients` registry and an explicit ownership projection field:
+
+```yaml
+access_context:
+  verify_account_cards: true
+  namespace: mattermost:example
+  bot_id: bbbbbbbbbbbbbbbbbbbbbbbbbb
+  scope_context: {agent_id: example, policy_space_id: reviewed-policy}
+  identity_projection:
+    actor_field: actor_user_id
+    audience_field: reader_user_ids
+    bot_owners_field: reader_bot_owners
+    subjects: {hhhhhhhhhhhhhhhhhhhhhhhhhh: 42}
+  bot_recipients:
+    - {id: pppppppppppppppppppppppppp, bot_id: 71, owner_user_id: 77}
+    - {id: qqqqqqqqqqqqqqqqqqqqqqqqqq, bot_id: 72, owner_user_id: 77}
+```
+
+These are synthetic identifiers, not a ready registration. A matching corporate
+role supplies `agent_id: example`. Operators must confirm each exact immutable
+source ID, registered bot ID and owner in the trusted registry before enabling
+the route. Source IDs and bot registrations must be unique; owners may repeat.
+Neither the execution bot nor a mapped human may appear in this list. The
+ownership field must be distinct from the actor, reader and static context
+fields. At most 1,000 bot registrations are accepted; the corporate assignment's
+total reader limit still applies.
+
+Only bots observed in the complete current audience enter the scope. Their
+owners join `reader_user_ids` without duplicates, and each bot remains a separate
+signed reader principal. Missing registration, inactive bot, changed owner or
+unconfirmed human blocks admission. Receive-only bots are excluded from actor,
+trigger and input authority. `peer_recipient` keeps its fixed-audience behavior
+and cannot be mixed with this registry. Local-policy modes cannot use this list.
+See [corporate bot verification](CORPORATE.md#registered-bot-recipients).
+The trusted Provider must also support the separate read-only
+`external.confirm_bot_audience` method, allowed on the receiver's service
+credential. It verifies current tuple ownership, activity and owner entitlement
+at admission, reconfirmation and before publication. Unsupported or ambiguous
+responses deny access; the human-card method is not a fallback.
+
+The confirmed Mattermost audience, excluding receive-only bot recipients, remains
 in a separate `allowed_input_subjects` list of namespaced source identities.
 The connector stores `access_proof` in its message metadata: the frozen source
 audience and a digest of the projection configuration. Channel, root and source

@@ -25,6 +25,7 @@ type Access struct {
 	ChannelOnly            bool               `yaml:"channel_only,omitempty" json:"channel_only,omitempty"`
 	LocalServices          bool               `yaml:"local_services,omitempty" json:"local_services,omitempty"`
 	Peer                   *PeerRecipient     `yaml:"peer_recipient,omitempty" json:"peer_recipient,omitempty"`
+	BotRecipients          []BotRecipient     `yaml:"bot_recipients,omitempty" json:"bot_recipients,omitempty"`
 	Namespace              string             `yaml:"namespace" json:"namespace"`
 	BotID                  string             `yaml:"bot_id" json:"bot_id"`
 	ScopeContext           map[string]any     `yaml:"scope_context" json:"scope_context"`
@@ -51,10 +52,34 @@ type PeerRecipient struct {
 	Field       string    `yaml:"field" json:"field"`
 }
 
+// BotRecipient is an operator-confirmed immutable source-to-registration binding.
+// Core rechecks the registered bot's active state and owner before granting access.
+type BotRecipient struct {
+	ID          string    `yaml:"id" json:"id"`
+	BotID       SubjectID `yaml:"bot_id" json:"bot_id"`
+	OwnerUserID SubjectID `yaml:"owner_user_id" json:"owner_user_id"`
+}
+
+func (a *Access) RegisteredBot(id string) *BotRecipient {
+	if a != nil {
+		for i := range a.BotRecipients {
+			if a.BotRecipients[i].ID == id {
+				return &a.BotRecipients[i]
+			}
+		}
+	}
+	return nil
+}
+
+func (a *Access) ReceiveOnly(id string) bool {
+	return a != nil && (a.Peer != nil && a.Peer.ID == id || a.RegisteredBot(id) != nil)
+}
+
 type IdentityProjection struct {
-	ActorField    string               `yaml:"actor_field" json:"actor_field"`
-	AudienceField string               `yaml:"audience_field" json:"audience_field"`
-	Subjects      map[string]SubjectID `yaml:"subjects" json:"subjects"`
+	ActorField     string               `yaml:"actor_field" json:"actor_field"`
+	AudienceField  string               `yaml:"audience_field" json:"audience_field"`
+	BotOwnersField string               `yaml:"bot_owners_field,omitempty" json:"bot_owners_field,omitempty"`
+	Subjects       map[string]SubjectID `yaml:"subjects" json:"subjects"`
 }
 
 // SubjectID preserves a configured string or decimal integer without float64
@@ -156,6 +181,34 @@ func (a Access) Validate() error {
 		_, overlaps := a.ScopeContext[peer.Field]
 		if !ValidID(peer.ID) || peer.ID == a.BotID || mapped || !envPattern.MatchString(peer.Field) || len(peer.Field) > 128 || peer.Field == p.ActorField || peer.Field == p.AudienceField || overlaps {
 			return errors.New("invalid protected peer recipient")
+		}
+	}
+	if len(a.BotRecipients) == 0 && p.BotOwnersField != "" {
+		return errors.New("bot ownership projection requires registered recipients")
+	}
+	if len(a.BotRecipients) > 0 {
+		agent, ok := a.ScopeContext["agent_id"].(string)
+		_, overlaps := a.ScopeContext[p.BotOwnersField]
+		if !a.VerifyAccountCards || a.Peer != nil || a.LocalPolicy() || a.LocalProviderContext || !ok || strings.TrimSpace(agent) == "" || len(a.BotRecipients) > 1000 {
+			return errors.New("registered bot recipients require confirmed corporate account cards")
+		}
+		if !envPattern.MatchString(p.BotOwnersField) || len(p.BotOwnersField) > 128 || p.BotOwnersField == p.ActorField || p.BotOwnersField == p.AudienceField || overlaps {
+			return errors.New("invalid bot ownership projection field")
+		}
+		sources, registrations := map[string]bool{}, map[string]bool{}
+		for _, bot := range a.BotRecipients {
+			_, mapped := p.Subjects[bot.ID]
+			if !ValidID(bot.ID) || bot.ID == a.BotID || mapped || sources[bot.ID] {
+				return errors.New("invalid or duplicate bot source identity")
+			}
+			raw, err := bot.BotID.MarshalJSON()
+			if err != nil || registrations[strings.Trim(string(raw), "\"")] {
+				return errors.New("invalid or duplicate bot registration")
+			}
+			if _, err := bot.OwnerUserID.MarshalJSON(); err != nil {
+				return err
+			}
+			sources[bot.ID], registrations[strings.Trim(string(raw), "\"")] = true, true
 		}
 	}
 	raw, err := json.Marshal(a.ScopeContext)

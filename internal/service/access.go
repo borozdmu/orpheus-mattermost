@@ -15,6 +15,11 @@ import (
 	api "github.com/orpheus-agents/orpheus/client"
 )
 
+type botOwnership struct {
+	BotID config.SubjectID `json:"bot_id"`
+	Owner config.SubjectID `json:"owner_user_id"`
+}
+
 // projectAccess keeps source identities in the core's input authority and maps
 // service identities only into the configured opaque provider fields.
 func projectAccess(binding config.Access, audience []string, actor string) (api.AccessScopeContext, []api.AccessSubject, error) {
@@ -28,6 +33,19 @@ func projectAccess(binding config.Access, audience []string, actor string) (api.
 	slices.Sort(members)
 	allowed := make([]api.AccessSubject, 0, len(members))
 	readers := make([]json.RawMessage, 0, len(members)-1)
+	readerIDs := make(map[string]bool, len(members))
+	var owners []botOwnership
+	appendReader := func(id config.SubjectID) error {
+		raw, err := id.MarshalJSON()
+		if err != nil {
+			return err
+		}
+		if !readerIDs[string(raw)] {
+			readers = append(readers, raw)
+			readerIDs[string(raw)] = true
+		}
+		return nil
+	}
 	seen := make(map[string]bool, len(members))
 	var missing []string
 	for _, id := range members {
@@ -36,6 +54,16 @@ func projectAccess(binding config.Access, audience []string, actor string) (api.
 		}
 		seen[id] = true
 		if binding.Peer != nil && id == binding.Peer.ID {
+			continue
+		}
+		if bot := binding.RegisteredBot(id); bot != nil {
+			if actor == id {
+				return nil, nil, errors.New("receive-only bot cannot author inputs")
+			}
+			if err := appendReader(bot.OwnerUserID); err != nil {
+				return nil, nil, err
+			}
+			owners = append(owners, botOwnership{bot.BotID, bot.OwnerUserID})
 			continue
 		}
 		allowed = append(allowed, api.AccessSubject{Namespace: binding.Namespace, ID: id})
@@ -47,11 +75,9 @@ func projectAccess(binding config.Access, audience []string, actor string) (api.
 			missing = append(missing, id)
 			continue
 		}
-		raw, err := mapped.MarshalJSON()
-		if err != nil {
+		if err := appendReader(mapped); err != nil {
 			return nil, nil, err
 		}
-		readers = append(readers, raw)
 	}
 	if !seen[actor] || !seen[binding.BotID] {
 		return nil, nil, errors.New("protected actor or bot outside audience")
@@ -82,6 +108,12 @@ func projectAccess(binding config.Access, audience []string, actor string) (api.
 			if err != nil {
 				return nil, nil, err
 			}
+		}
+	}
+	if len(owners) > 0 {
+		scope[binding.IdentityProjection.BotOwnersField], err = json.Marshal(owners)
+		if err != nil {
+			return nil, nil, err
 		}
 	}
 	actorID, err := binding.IdentityProjection.Subjects[actor].MarshalJSON()
@@ -195,7 +227,7 @@ func (e *Engine) readAudience(ctx context.Context, w config.Workflow, key conver
 		if err != nil {
 			return nil, time.Time{}, err
 		}
-		expectBot := w.Access.Peer != nil && id == w.Access.Peer.ID
+		expectBot := w.Access.ReceiveOnly(id)
 		if user.ID != id || user.DeleteAt != 0 || user.IsBot != expectBot {
 			return nil, time.Time{}, errors.New("unconfirmed audience identity")
 		}
@@ -206,7 +238,16 @@ func (e *Engine) readAudience(ctx context.Context, w config.Workflow, key conver
 	if time.Since(observed) >= time.Minute {
 		return nil, time.Time{}, errors.New("audience observation expired")
 	}
-	return audience, observed, confirmAccountCards(ctx, w.Access, audience)
+	if err := confirmAccountCards(ctx, w.Access, audience); err != nil {
+		return nil, time.Time{}, err
+	}
+	if err := confirmBotRecipients(ctx, w.Access, audience); err != nil {
+		return nil, time.Time{}, err
+	}
+	if time.Since(observed) >= time.Minute {
+		return nil, time.Time{}, errors.New("audience observation expired")
+	}
+	return audience, observed, nil
 }
 
 // Admission is called after the coordinator reserves a run slot. The result is
@@ -221,7 +262,7 @@ func (e *Engine) admission(ctx context.Context, w config.Workflow, key conversat
 		if !slices.Contains(env.TriggerIDs, post.ID) {
 			continue
 		}
-		if !slices.Contains(audience, post.UserID) || (w.Access.Peer != nil && post.UserID == w.Access.Peer.ID) {
+		if !slices.Contains(audience, post.UserID) || w.Access.ReceiveOnly(post.UserID) {
 			return nil, nil, errors.New("trigger author outside audience")
 		}
 		if post.ID == env.Anchor {

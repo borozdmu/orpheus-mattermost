@@ -27,6 +27,71 @@ installs the short-lived token. Provider alone calculates service rights.
 After publication, later additions to chat/team history are the administrator's
 responsibility; the connector does not delete or reclassify prior messages.
 
+## Registered bot recipients
+
+Corporate bindings can declare `access_context.bot_recipients` for bots that
+read the channel but never author inputs or trigger model runs. This registry
+does not replace any part of the current audience. An unregistered bot still
+blocks admission. A registry entry may be absent from the current roster; only
+observed recipients enter the assignment.
+
+Each entry binds three independently confirmed identifiers: the immutable
+Mattermost `id`, the registered `bot_id`, and its `owner_user_id`. Operators must
+verify that exact source account against the trusted bot registry before arming
+the route. Configuration alone does not establish a registration. Do not infer
+ownership from names, roles, business email or membership. The trusted registry
+must keep source account identity immutable for a registration ID; another
+source account requires another registration.
+
+Set `identity_projection.bot_owners_field` to the ownership field accepted by
+the integration. The common Provider uses `reader_bot_owners`. The connector
+projects every observed bot as `{bot_id, owner_user_id}` and includes its owner
+in the reader identity array. Several bots may share one owner: the data scope
+contains that owner once, while the signed assignment retains each bot as a
+separate reader principal. Core and Provider recheck bot activity, ownership
+and the owner's agent/data permissions before issuing or renewing credentials
+and before protected operations. Revocation or a changed owner denies access.
+
+This registry requires a matching corporate `agent_id` and
+`verify_account_cards: true`. It cannot be combined with the fixed legacy
+`peer_recipient` or local-policy modes. Human account confirmation remains
+separate; bots and their owners are never submitted as invented human
+Mattermost accounts. This configuration does not register bots or grant rights.
+
+### Required trusted recipient check
+
+Do not activate this registry until the trusted Provider supports the read-only
+RPC `external.confirm_bot_audience` and the receiver's service credential permits
+that method. The human `external.confirm_audience` method remains unchanged and
+does not prove bot authorization. Existing Provider versions without the new
+capability deny workflows that observe registered bot recipients.
+
+The request uses the ordinary `request_id` envelope and only these parameters:
+
+```json
+{
+  "provider": "mattermost",
+  "agent_key": "example",
+  "bots": {
+    "pppppppppppppppppppppppppp": {"bot_id": 71, "owner_user_id": 77}
+  }
+}
+```
+
+The Provider must confirm the exact immutable source-account/registration tuple,
+the active bot and owner, the owner's required agent entitlement and a stable
+ownership revision. It returns exactly `request_id`, `ok: true` and a boolean
+`result`. This method reads authority only: it must not issue or renew credentials,
+register identities, edit grants or rely on a model's assertion.
+
+The connector calls it for currently observed registered recipients at admission,
+corporate reconfirmation and immediately before each output publication. A bot
+revocation, changed owner or withdrawn owner entitlement therefore blocks output
+even when the YAML and Mattermost roster remain unchanged. An unavailable method,
+timeout, non-200 response or ambiguous result fails closed; configuration and human
+card checks never substitute for the decision. Bindings without this registry do
+not acquire a new Provider dependency.
+
 ## Existing state partitions
 
 For an existing channel, set `chat_access[channel].state_ref` to its exact old

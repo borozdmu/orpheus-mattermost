@@ -15,7 +15,7 @@ import (
 	"github.com/orpheus-agents/orpheus-mattermost/internal/config"
 )
 
-// TeamAudience conservatively includes ALL current team members, including
+// TeamAudience conservatively includes ALL active team members, including
 // guests and restricted accounts. Permissions never remove a reader here.
 // Two complete scans also detect same-count membership/role/scheme changes.
 func (c *Client) TeamAudience(ctx context.Context, team string) ([]string, string, error) {
@@ -46,9 +46,11 @@ func (c *Client) TeamAudience(ctx context.Context, team string) ([]string, strin
 			return nil, "", denied
 		}
 		count := func() (int, error) {
+			// Mattermost retains deactivated users in the total count. Only
+			// the active count can prove completeness of the filtered pages.
 			var stats struct {
 				TeamID string `json:"team_id"`
-				Count  *int   `json:"total_member_count"`
+				Count  *int   `json:"active_member_count"`
 			}
 			err := c.json(ctx, "GET", "/teams/"+url.PathEscape(team)+"/stats", nil, &stats)
 			if err != nil || stats.TeamID != team || stats.Count == nil || *stats.Count < 1 || *stats.Count > 4096 {
@@ -65,7 +67,7 @@ func (c *Client) TeamAudience(ctx context.Context, team string) ([]string, strin
 		var ids []string
 		for page := 0; ; page++ {
 			var batch []member
-			q := url.Values{"page": {strconv.Itoa(page)}, "per_page": {"200"}}
+			q := url.Values{"page": {strconv.Itoa(page)}, "per_page": {"200"}, "exclude_deleted_users": {"true"}}
 			if c.json(ctx, "GET", "/teams/"+url.PathEscape(team)+"/members?"+q.Encode(), nil, &batch) != nil || batch == nil || len(batch) > 200 {
 				return nil, "", denied
 			}
