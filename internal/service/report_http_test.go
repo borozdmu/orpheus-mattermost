@@ -508,7 +508,7 @@ func TestReportMethodReasonIsBounded(t *testing.T) {
 }
 
 func TestReportPriorMethodFailureGetsOneFreshAdmission(t *testing.T) {
-	for _, kind := range []string{"initial", "late-failure", "edited", "foreign", "signed-method-denial", "incomplete"} {
+	for _, kind := range []string{"initial", "late-failure", "edited", "foreign", "signed-method-denial", "incomplete", "missing-proof", "wrong-seal"} {
 		t.Run(kind, func(t *testing.T) {
 			f := reportExample(t)
 			_, first, _ := f.stage(t)
@@ -523,6 +523,31 @@ func TestReportPriorMethodFailureGetsOneFreshAdmission(t *testing.T) {
 			h.Completeness = "complete"
 			h.Output = "Mattermost file hook failed: stage=report_exchange; HTTPError: HTTP 403"
 			switch kind {
+			case "missing-proof", "wrong-seal":
+				m := &f.api.snapshot.Sessions[0].Messages[0]
+				env, err := conversation.Decode(m.Metadata)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if kind == "missing-proof" {
+					env.AccessProof = nil
+				} else {
+					assignment, err := agentcontract.Decode(*env.AccessContext.Assignment)
+					if err != nil {
+						t.Fatal(err)
+					}
+					assignment.Confirmation.Receipt = strings.Repeat("0", 64)
+					raw, err := json.Marshal(assignment)
+					if err != nil {
+						t.Fatal(err)
+					}
+					*env.AccessContext.Assignment = raw
+				}
+				raw, err := json.Marshal(env)
+				if err != nil {
+					t.Fatal(err)
+				}
+				m.Metadata = raw
 			case "late-failure":
 				h.Output = "Mattermost file hook failed: stage=report_submission; HTTPError: HTTP 403"
 			case "edited":

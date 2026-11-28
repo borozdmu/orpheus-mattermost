@@ -111,9 +111,8 @@ func (e *Engine) activeReport(ctx context.Context, w config.Workflow, card repor
 			if err != nil || env.Report == nil || !env.Report.Valid(card) || !reportInputBound(w, env, card) || env.AccessContext.Assignment == nil {
 				break
 			}
-			a, err := agentcontract.Decode(*env.AccessContext.Assignment)
-			if err != nil || a.Author.ID != card.Actor || a.Confirmation.Digest != a.Digest() || a.InvocationID != env.AccessContext.InvocationID || a.Delivery.Message != env.Anchor || a.Delivery.Chat != card.Channel || a.Delivery.Thread != card.Thread || a.Delivery.Source != e.SourceID ||
-				a.Verify(os.Getenv("ORPHEUS_AUDIENCE_SECRET"), a.Confirmation.ObservedAt) != nil || !hmac.Equal([]byte(token), []byte(env.Report.Token(os.Getenv("ORPHEUS_AUDIENCE_SECRET"), a.InvocationID.String(), a.Confirmation.Digest, env.AccessContext.ContextObservedAt))) {
+			a, err := reportAssignment(env, card, e.SourceID)
+			if err != nil || !hmac.Equal([]byte(token), []byte(env.Report.Token(os.Getenv("ORPHEUS_AUDIENCE_SECRET"), a.InvocationID.String(), a.Confirmation.Digest, env.AccessContext.ContextObservedAt))) {
 				break
 			}
 			reply := reportRequest{e: e, w: w, card: card, env: env, run: r, assignment: a}

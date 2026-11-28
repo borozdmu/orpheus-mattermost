@@ -85,6 +85,23 @@ func reportInputBound(w config.Workflow, env conversation.Envelope, card reportj
 	return f.PostID == env.Anchor && f.ChannelID == env.Channel && f.Origin == "thread" && f.Status == "" && f.Size > 0 && f.Size <= 1<<20
 }
 
+// Verify the recorded assignment at issue time for provenance. Current
+// authority is evaluated separately for every admission and file exchange.
+func reportAssignment(env conversation.Envelope, card reportjob.Card, sourceID string) (agentcontract.Assignment, error) {
+	var empty agentcontract.Assignment
+	ctx := env.AccessContext
+	if ctx == nil || ctx.Assignment == nil || env.AccessProof == nil {
+		return empty, errReportBinding
+	}
+	a, err := agentcontract.Decode(*ctx.Assignment)
+	if err != nil || a.Author.ID != card.Actor || a.Author.ID != ctx.Subject.ID || a.Author.Namespace != ctx.Subject.Namespace || a.Confirmation.Revision != env.Revision ||
+		!a.Confirmation.ObservedAt.Equal(ctx.ContextObservedAt) || a.InvocationID != ctx.InvocationID || a.Delivery.Connector != "mattermost" || a.Delivery.Message != env.Anchor ||
+		a.Delivery.Chat != card.Channel || a.Delivery.Thread != card.Thread || a.Delivery.Source != sourceID || a.Verify(os.Getenv("ORPHEUS_AUDIENCE_SECRET"), a.Confirmation.ObservedAt) != nil {
+		return empty, errReportBinding
+	}
+	return a, nil
+}
+
 func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conversation.Key, channel mattermost.Channel, snap conversation.Snapshot, p *delivery.Publisher) (bool, error) {
 	history := false
 	for _, s := range snap.Sessions {
@@ -111,6 +128,7 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 	if card.Workflow != key.Workflow || card.Channel != key.Channel || card.Thread != key.Root {
 		return false, nil
 	}
+	var previousSession *conversation.Session
 	var prev conversation.Envelope
 	var run conversation.Run
 	for _, s := range snap.Sessions {
@@ -123,12 +141,19 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 				return true, errors.New("conflicting report history")
 			}
 			if prev.Report == nil || prev.Report.Number < env.Report.Number || prev.Report.Number == env.Report.Number && prev.Report.Attempt < env.Report.Attempt {
-				prev, run = env, r
+				previousSession, prev, run = &s, env, r
 			}
 		}
 	}
 	if prev.Report == nil || !run.Terminal() || run.CancelRequested || run.Status == "cancelled" {
 		return false, nil
+	}
+	old, err := protectedContract(previousSession, &run, w, key)
+	if err != nil || previousSession.ExternalKey != key.External() || run.SessionID != previousSession.ID || !reportInputBound(w, old, card) {
+		return true, errReportBinding
+	}
+	if _, err = reportAssignment(old, card, e.SourceID); err != nil {
+		return true, err
 	}
 	receipt, artifact, err := e.reportReceipt(ctx, p, prev, run)
 	if err != nil {
