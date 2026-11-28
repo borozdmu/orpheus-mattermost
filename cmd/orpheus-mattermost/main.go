@@ -29,7 +29,10 @@ func main() {
 }
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: orpheus-mattermost serve|validate|healthcheck|export-checkpoint|list-channel-admission-bindings|check-channel-admission")
+		return errors.New("usage: orpheus-mattermost serve|validate|healthcheck|export-checkpoint|list-channel-admission-bindings|check-channel-admission|check-accepted-file")
+	}
+	if args[0] == "check-accepted-file" {
+		return checkAcceptedFile(args[1:])
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	trace := flags.String("trace", "", "channel admission probe correlation ID")

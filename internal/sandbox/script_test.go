@@ -36,8 +36,8 @@ func TestEmbeddedHooksAndGoContract(t *testing.T) {
 			_, _ = fmt.Fprintf(w, `{"id":%q}`, id)
 		case "/api/v4/posts/" + id:
 			_, _ = fmt.Fprintf(w, `{"id":%q,"channel_id":%q,"file_ids":[%q]}`, id, id, fileID)
-		case "/api/v4/files/" + fileID + "/info":
-			_, _ = fmt.Fprintf(w, `{"id":%q,"post_id":%q,"size":3,"mime_type":"image/png"}`, fileID, id)
+		case "/api/v4/posts/" + id + "/files/info":
+			_, _ = fmt.Fprintf(w, `[{"id":%q,"post_id":%q,"size":3,"mime_type":"image/png"}]`, fileID, id)
 		case "/api/v4/files/" + fileID:
 			_, _ = w.Write([]byte("png"))
 		case "/api/v4/files":
