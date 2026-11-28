@@ -15,6 +15,24 @@ func testCard() Card {
 	return Card{Schema: "orpheus.mattermost.report-card.v1", Job: uuid.NewString(), Workflow: "test", Channel: strings.Repeat("c", 26), Thread: strings.Repeat("t", 26), Actor: strings.Repeat("a", 26), Method: strings.Repeat("e", 64), Source: "my", Revision: "test-v1", URL: "https://beta-kord.skillum.ai" + BasePath}
 }
 
+func TestMethodDiagnosticInvocation(t *testing.T) {
+	anchor := uuid.New()
+	s := Stage{Job: uuid.NewString(), Number: 3, Attempt: 1, RetryRun: uuid.NewString(), Method: &MethodRevision{First: 2}}
+	previousForm, err := json.Marshal([]any{"orpheus.mattermost.method-invocation.v1", s.Job, s.Number, s.Method, s.Prior, s.Attempt, s.RetryRun})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordinary := s.Invocation(anchor)
+	if ordinary != uuid.NewSHA1(anchor, previousForm) {
+		t.Fatal("existing ordinary method invocation changed")
+	}
+	s.Diagnostic = true
+	diagnostic := s.Invocation(anchor)
+	if diagnostic == ordinary || diagnostic != s.Invocation(anchor) {
+		t.Fatal("diagnostic must have a distinct, repeatable identity")
+	}
+}
+
 func TestCardPinAndScope(t *testing.T) {
 	c := testCard()
 	if !c.Valid() {

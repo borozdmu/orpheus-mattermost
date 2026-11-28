@@ -22,17 +22,24 @@ SOURCE_DIAGNOSTICS = (
     'invalid_alignment', 'incomplete_page', 'missing_history_range',
     'unconfirmed_custom_value', 'marker_size_rejected', 'incorrect_history_field',
 )
+REVIEWED_TRANSPORT_SHA256 = 'ae181f2f646d884af6524548fcfc39f68bfbd5c9464d576b0c674a1cf5443c34'
+CATALOG_DIAGNOSTICS = (
+    'kord_request_failed', 'data_service_unavailable', 'data_access_denied',
+    'source_not_granted', 'source_not_configured', 'invalid_capability', 'capability_expired',
+    'invalid_request', 'invalid_source', 'unknown_operation', 'current_client_failed',
+    'unreviewed_crm_client', 'live_read_grant_unconfirmed', 'unclassified',
+)
 REPORT_DIAGNOSTICS = SOURCE_DIAGNOSTICS + (
     'program_error', 'source_validation', 'history_alignment_changed', 'history_count_changed',
     'history_order_changed', 'history_cursor_changed', 'history_final_count_changed', 'history_boundary_changed',
     'required_key_missing', 'invalid_value', 'invalid_type', 'io_error', 'memory_error',
-)
+) + tuple(action + '_' + code for action in ('schema', 'sources') for code in CATALOG_DIAGNOSTICS)
 
 REPORT_PROGRAM = """
 import hashlib, json, runpy, sys, zipfile
 
 method = sys.argv[1]
-labels, source_codes = json.loads(sys.argv[2])
+labels, source_codes, catalog_codes, transport_sha = json.loads(sys.argv[2])
 sys.argv = [method]
 try:
     runpy.run_path(method, run_name='__main__')
@@ -45,6 +52,22 @@ except Exception as e:
     if kind in (('transport', 'SourceError'), ('transport', 'Changed')):
         reason = e.args[0] if len(e.args) == 1 and type(e.args[0]) is str else None
         label = reason if reason in source_codes else 'source_validation'
+        if kind == ('transport', 'SourceError'):
+            # Identify only the two operations exposed by the unchanged reviewed
+            # transport. Unknown exception text is never used in the output.
+            tb = e.__traceback__
+            actions = {'Kord.__init__': 'schema', 'Kord.require_live_grant': 'sources'}
+            while tb:
+                frame = tb.tb_frame
+                action = actions.get(frame.f_code.co_qualname)
+                if frame.f_globals.get('__name__') == 'transport' and action:
+                    with zipfile.ZipFile(method) as z:
+                        reviewed = hashlib.sha256(z.read('transport.py')).hexdigest() == transport_sha
+                    if reviewed:
+                        code = reason if reason in catalog_codes else 'unclassified'
+                        label = action + '_' + code
+                    break
+                tb = tb.tb_next
         if kind == ('transport', 'Changed') and label == 'scoped_source_changed':
             # These exact instructions distinguish order, pagination and count
             # changes which the released program raises as one exception type.
@@ -66,7 +89,7 @@ except Exception as e:
 """
 
 def run_report(python, method, work, child):
-    allowed = json.dumps([REPORT_DIAGNOSTICS, SOURCE_DIAGNOSTICS])
+    allowed = json.dumps([REPORT_DIAGNOSTICS, SOURCE_DIAGNOSTICS, CATALOG_DIAGNOSTICS, REVIEWED_TRANSPORT_SHA256])
     result = subprocess.run([python, '-I', '-c', REPORT_PROGRAM, method, allowed],
                             cwd=work, env=child, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, timeout=540, check=False)
