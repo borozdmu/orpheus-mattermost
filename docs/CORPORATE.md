@@ -11,6 +11,12 @@ employee cards and signs the entire assignment with the server-only
 configuration, audience and cards. It never issues a Kord token. New inputs
 wait for the next protected run and obtain the requesting author's own grant.
 
+The audience callback allows up to 50 seconds to read, validate and confirm
+its request and three more seconds to return the witness. The core client
+allows 60 seconds. The listener retains its usual deadline on other paths.
+Failures and confirmations taking at least five seconds log a fixed result,
+elapsed milliseconds and, after signature verification, the invocation ID.
+
 Private channels and direct messages use their complete current membership.
 Public channels require explicit `public_team_audience: true` and all current
 users of their team, including guests and restricted accounts. Before scanning,
