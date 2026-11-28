@@ -42,29 +42,29 @@ func statePartition(w config.Workflow) string {
 }
 
 type Runtime struct {
-	Engine                                         *Engine
-	Logger                                         *slog.Logger
-	Reload                                         <-chan config.Config
-	ready                                          atomic.Bool
-	cycles, failures, reconnects, retries          atomic.Uint64
-	cycleNanos, lastSuccess, replayLag, activeRuns atomic.Int64
-	mu                                             sync.Mutex
-	cfg                                            config.Config
-	jobs                                           map[conversation.Key]*scheduled
-	channels                                       map[string]mattermost.Channel
-	active                                         map[conversation.Key]int
-	unknown                                        map[conversation.Key]bool
-	watchers                                       map[string]context.CancelFunc
-	watchKeys                                      map[string]conversation.Key
-	retired                                        map[string]config.Workflow
-	digests                                        map[conversation.Key]string
-	scanned                                        map[string]time.Time
-	discovered                                     map[string]time.Time
-	wake                                           chan struct{}
-	sequence, epoch                                uint64
-	running                                        int
-	scanning, discovering, initialized             bool
-	scanAt                                         time.Time
+	Engine                                *Engine
+	Logger                                *slog.Logger
+	Reload                                <-chan config.Config
+	ready                                 atomic.Bool
+	cycles, failures, reconnects, retries atomic.Uint64
+	cycleNanos, lastSuccess, replayLag    atomic.Int64
+	mu                                    sync.Mutex
+	cfg                                   config.Config
+	jobs                                  map[conversation.Key]*scheduled
+	channels                              map[string]mattermost.Channel
+	active                                map[conversation.Key]int
+	unknown                               map[conversation.Key]bool
+	watchers                              map[string]context.CancelFunc
+	watchKeys                             map[string]conversation.Key
+	retired                               map[string]config.Workflow
+	digests                               map[conversation.Key]string
+	scanned                               map[string]time.Time
+	discovered                            map[string]time.Time
+	wake                                  chan struct{}
+	sequence, epoch                       uint64
+	running                               int
+	scanning, discovering, initialized    bool
+	scanAt                                time.Time
 }
 
 func (r *Runtime) notify() {
@@ -465,11 +465,6 @@ func (r *Runtime) observe(ctx context.Context, wg *sync.WaitGroup, key conversat
 			}
 		}
 	}
-	total := 0
-	for _, n := range r.active {
-		total += n
-	}
-	r.activeRuns.Store(int64(total))
 }
 
 // A single discovery goroutine runs independently of thread workers. Its bounded
