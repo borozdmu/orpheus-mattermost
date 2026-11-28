@@ -109,28 +109,54 @@ type Output struct {
 	Session  string `json:"session_id"`
 }
 
-// MethodRevision binds a single reviewed replacement to both real commands.
+// MethodRevision binds each approved replacement to its two native commands.
+// A second revision retains the complete first revision.
 type MethodRevision struct {
-	Approval       string `json:"approval_sha256"`
-	Original       string `json:"original_post_id"`
-	OriginalHash   string `json:"original_post_sha256"`
-	OriginalEdited int64  `json:"original_edit_at"`
-	Post           string `json:"approval_post_id"`
-	PostHash       string `json:"approval_post_sha256"`
-	File           string `json:"method_file_id"`
-	From           string `json:"from_sha256"`
-	To             string `json:"to_sha256"`
-	First          int    `json:"first_stage"`
+	Previous       *MethodRevision `json:"previous_method,omitempty"`
+	Approval       string          `json:"approval_sha256"`
+	Original       string          `json:"original_post_id"`
+	OriginalHash   string          `json:"original_post_sha256"`
+	OriginalEdited int64           `json:"original_edit_at"`
+	Post           string          `json:"approval_post_id"`
+	PostHash       string          `json:"approval_post_sha256"`
+	File           string          `json:"method_file_id"`
+	From           string          `json:"from_sha256"`
+	To             string          `json:"to_sha256"`
+	First          int             `json:"first_stage"`
 }
 
 func (u MethodRevision) valid(card Card) bool {
+	if u.Previous != nil {
+		p := u.Previous
+		if p.Previous != nil || !p.valid(card) || u.From != p.To || u.To == card.Method ||
+			u.Original != p.Post || u.OriginalHash != p.PostHash || u.OriginalEdited != 0 || u.First <= p.First ||
+			u.Post == p.Original || u.File == p.File {
+			return false
+		}
+	} else if u.From != card.Method {
+		return false
+	}
 	return u.First >= 2 && id.MatchString(u.Original) && id.MatchString(u.Post) && u.Post != u.Original &&
 		id.MatchString(u.File) && sha.MatchString(u.OriginalHash) && u.OriginalEdited >= 0 && sha.MatchString(u.PostHash) &&
-		sha.MatchString(u.Approval) && u.From == card.Method && sha.MatchString(u.To) && u.To != u.From
+		sha.MatchString(u.Approval) && sha.MatchString(u.To) && u.To != u.From
 }
 
 func (u MethodRevision) Approved(a MethodApproval, c Card) bool {
-	return u.valid(c) && a.Valid(c) && u.Approval == a.Digest() && u.From == a.From && u.To == a.To
+	return u.Previous == nil && u.valid(c) && a.Valid(c) && u.Approval == a.Digest() && u.From == a.From && u.To == a.To
+}
+
+// Match compares persisted revisions by value after independent JSON decoding.
+func (u MethodRevision) Match(v MethodRevision) bool {
+	p, q := u.Previous, v.Previous
+	u.Previous, v.Previous = nil, nil
+	return u == v && (p == nil && q == nil || p != nil && q != nil && p.Previous == nil && q.Previous == nil && *p == *q)
+}
+
+func (s Stage) ApprovedSecond(c Card, first MethodApproval, a SecondApproval) bool {
+	u := s.Method
+	return u != nil && u.Previous != nil && u.valid(c) && u.Previous.Approved(first, c) && a.Valid(c, first) &&
+		u.Approval == a.Digest() && u.From == a.From && u.To == a.To && u.First == a.Stage &&
+		(s.Number > u.First || s.Number == u.First && s.Prior != nil && s.Prior.Position == a.Position && s.Prior.SHA == a.Checkpoint)
 }
 
 type Stage struct {

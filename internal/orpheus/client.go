@@ -367,8 +367,18 @@ func (c *Client) Submit(ctx context.Context, w config.Workflow, e conversation.E
 		method := card.Method
 		if stage.Method != nil {
 			approval, err := reportjob.LoadMethodApproval(card)
-			if err != nil || !stage.Method.Approved(approval, card) || stage.Method.Post != e.Anchor || len(e.Request.Files) != 1 || stage.Method.File != e.Request.Files[0].FileID || approval.FileName != e.Request.Files[0].Name {
+			if err != nil || stage.Method.Post != e.Anchor || len(e.Request.Files) != 1 || stage.Method.File != e.Request.Files[0].FileID {
 				return conversation.Accepted{}, errors.New("report method replacement unconfirmed")
+			}
+			if stage.Method.Previous == nil {
+				if !stage.Method.Approved(approval, card) || approval.FileName != e.Request.Files[0].Name {
+					return conversation.Accepted{}, errors.New("report method replacement unconfirmed")
+				}
+			} else {
+				second, err := reportjob.LoadSecondApproval(card, approval)
+				if err != nil || !stage.ApprovedSecond(card, approval, second) || second.FileName != e.Request.Files[0].Name {
+					return conversation.Accepted{}, errors.New("second report method replacement unconfirmed")
+				}
 			}
 			method = stage.Method.To
 		}

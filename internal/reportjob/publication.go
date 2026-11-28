@@ -135,6 +135,9 @@ type PublicationEvent struct {
 	Invocation string `json:"invocation"`
 	Action     string `json:"action"`
 	Digest     string `json:"digest"`
+	Former     string `json:"previous_invocation,omitempty"`
+	PriorRun   string `json:"checkpoint_run,omitempty"`
+	PriorSHA   string `json:"checkpoint_sha256,omitempty"`
 }
 
 type publicationState struct {
@@ -143,6 +146,7 @@ type publicationState struct {
 	last      string
 	claim     string
 	handedOff bool
+	replaced  bool
 }
 
 func (s *publicationState) apply(v PublicationEvent) (bool, error) {
@@ -157,12 +161,19 @@ func (s *publicationState) apply(v PublicationEvent) (bool, error) {
 		}
 		s.claim = v.Invocation
 	case "handoff":
-		if s.claim == "" || s.handedOff || s.claim == v.Invocation || s.last != "" ||
+		if s.claim == "" || s.replaced || s.handedOff || s.claim == v.Invocation || s.last != "" ||
 			s.opens[v.Run] != s.claim+" "+v.Digest {
 			return false, conflict
 		}
 		s.claim = v.Invocation
 		s.handedOff = true
+	case "method-change":
+		if v.Stage < 2 || !GUID(v.Former) || !GUID(v.PriorRun) || !sha.MatchString(v.PriorSHA) ||
+			v.Invocation == v.Former || v.PriorRun == v.Run || s.last != "" || s.claim != "" || s.replaced ||
+			len(s.opens) != 1 || s.opens[v.Run] != v.Former+" "+v.Digest {
+			return false, conflict
+		}
+		s.claim, s.replaced = v.Invocation, true
 	case "open":
 		if s.claim != "" && s.claim != v.Invocation {
 			return false, conflict
@@ -254,12 +265,30 @@ func (p *Publication) visit(ctx context.Context, v PublicationEvent, write bool)
 		}
 		return s
 	}
+	apply := func(v PublicationEvent) (bool, error) {
+		if v.Action == "method-change" {
+			prior := states[v.Stage-1]
+			if prior == nil || prior.last != "receipt" || prior.result.Run != v.PriorRun || prior.result.Digest != v.PriorSHA {
+				return false, errors.New("prior checkpoint receipt changed")
+			}
+		} else if v.Former != "" || v.PriorSHA != "" || v.PriorRun != "" {
+			return false, errors.New("unexpected checkpoint references")
+		}
+		return state(v.Stage).apply(v)
+	}
 	for _, line := range lines[1 : len(lines)-1] {
 		var old PublicationEvent
-		if len(line) > 1024 || !exactJSONFields(line, "stage", "run", "invocation", "action", "digest") || json.Unmarshal(line, &old) != nil {
+		if len(line) > 1024 || json.Unmarshal(line, &old) != nil {
 			return errors.New("corrupt publication journal")
 		}
-		add, err := state(old.Stage).apply(old)
+		fields := []string{"stage", "run", "invocation", "action", "digest"}
+		if old.Action == "method-change" {
+			fields = append(fields, "previous_invocation", "checkpoint_run", "checkpoint_sha256")
+		}
+		if !exactJSONFields(line, fields...) {
+			return errors.New("corrupt publication journal")
+		}
+		add, err := apply(old)
 		if err != nil || !add {
 			return errors.New("inconsistent publication journal")
 		}
@@ -274,7 +303,7 @@ func (p *Publication) visit(ctx context.Context, v PublicationEvent, write bool)
 		}
 		return ctx.Err()
 	}
-	add, err := current.apply(v)
+	add, err := apply(v)
 	if err != nil {
 		return err
 	}

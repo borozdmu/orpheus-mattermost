@@ -182,19 +182,26 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 	if err != nil {
 		return true, err
 	}
-	replacement, err := e.requestedMethod(card, prev, post, p.Posts)
-	if err != nil {
-		return true, err
+	var replacement *reportjob.MethodRevision
+	if prev.Report.Method == nil || receipt == nil {
+		replacement, err = e.requestedMethod(card, prev, post, p.Posts)
+		if err != nil {
+			return true, err
+		}
 	}
 	nextStage := reportjob.Stage{Card: card.Digest(), Job: card.Job, Method: prev.Report.Method}
 	var handoff bool
+	secondChange := replacement != nil && replacement.Previous != nil
+	if secondChange && !secondMethodBoundary(prev, run) {
+		return true, errors.New("second method requires a confirmed pre-publication stop")
+	}
 	switch {
 	case receipt != nil:
 		nextStage.Number = prev.Report.Number + 1
 		nextStage.Prior = receipt
 	case replacement != nil:
 		// A failed old stage can only resume from an already published earlier file.
-		if prev.Report.Prior == nil || !provenBeforeSubmission(prev, run) {
+		if prev.Report.Prior == nil || !secondChange && !provenBeforeSubmission(prev, run) {
 			return true, errors.New("report method change has no safe checkpoint boundary")
 		}
 		req := reportRequest{e: e, w: w, card: card, env: prev, run: run}
@@ -225,6 +232,11 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 			}
 		}
 		ordinaryRetry := !prev.Report.Diagnostic && prev.Report.Attempt < 3 && (diagnostic || reportHookWitness(prev, run, "retry-before-upload", "report-retry-v1") || legacyInitialMethodRefusal(prev, run))
+		if method := prev.Report.Method; method != nil && method.Previous != nil && method.First == prev.Report.Number {
+			// The final transfer gave this exact invocation the only remaining
+			// writer slot for its stage. A receipt advances to a new stage.
+			ordinaryRetry = false
+		}
 		if prev.Report.Recovery != "" {
 			handoff = ordinaryRetry && recoveredCalculationRetry(prev, run)
 			ordinaryRetry = handoff
@@ -311,14 +323,17 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 			return true, err
 		}
 	}
-	if nextStage.Recovery != "" || handoff {
+	if nextStage.Recovery != "" || handoff || secondChange {
 		if _, err = e.reportCommand(ctx, card, next.Envelope); err != nil {
 			return true, err
 		}
 		invocation := next.Envelope.AccessContext.InvocationID.String()
-		if handoff {
+		switch {
+		case secondChange:
+			err = retireForSecondMethod(ctx, card, prev, run, previousAssignment, invocation)
+		case handoff:
 			err = handoffRecovery(ctx, card, prev, run, previousAssignment, invocation)
-		} else {
+		default:
 			err = claimRecovery(ctx, card, nextStage, invocation)
 		}
 		if err != nil {

@@ -84,8 +84,16 @@ func recoveredCalculationRetry(env conversation.Envelope, run conversation.Run) 
 		run.FinishedAt == nil || len(run.Hooks) != 1 {
 		return false
 	}
+	return signedPreUploadStop(env, run)
+}
+
+func signedPreUploadStop(env conversation.Envelope, run conversation.Run) bool {
+	if run.Status != "failed" || run.CancelRequested || run.FinishedAt == nil || len(run.Hooks) != 1 {
+		return false
+	}
 	h := run.Hooks[0]
-	if h.StartedAt == nil || h.DeadlineAt == nil || h.FinishedAt == nil || !h.FinishedAt.After(*h.StartedAt) ||
+	if h.Name != "before_run" || h.Status != "failed" || h.Completeness != "complete" ||
+		h.StartedAt == nil || h.FinishedAt == nil || h.DeadlineAt == nil || !h.FinishedAt.After(*h.StartedAt) ||
 		!h.FinishedAt.Before(*h.DeadlineAt) || h.FinishedAt.After(*run.FinishedAt) {
 		return false
 	}
@@ -99,6 +107,30 @@ func recoveredCalculationRetry(env conversation.Envelope, run conversation.Run) 
 	witness, rest, ok := strings.Cut(output, "\n")
 	return ok && rest == "Mattermost file hook failed: stage=report_calculation; validation failed: report calculation did not finish this stage\n" &&
 		strings.HasPrefix(witness, "report-retry-v1 ") && reportHookWitness(env, run, "retry-before-upload", "report-retry-v1")
+}
+
+func secondMethodBoundary(env conversation.Envelope, run conversation.Run) bool {
+	s := env.Report
+	if s == nil || s.Storage == "" || s.Recovery != "" || s.Method == nil || s.Method.Previous != nil ||
+		s.Number <= s.Method.First || !completeCalculationFailure(env, run, "report-calculation-v1 marker_size_rejected\nMattermost file hook failed: stage=report_calculation; validation failed: report calculation did not finish this stage\n") {
+		return false
+	}
+	return !run.Hooks[0].FinishedAt.After(*run.FinishedAt)
+}
+
+func retireForSecondMethod(ctx context.Context, card reportjob.Card, prev conversation.Envelope, run conversation.Run, assignment agentcontract.Assignment, invocation string) error {
+	journal, err := openPublication(card)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = journal.File.Close() }()
+	s := prev.Report
+	if journal.Approval.Registration() != s.Storage || s.Prior == nil {
+		return errReportBinding
+	}
+	return journal.Record(ctx, reportjob.PublicationEvent{Stage: s.Number, Run: run.ID, Invocation: invocation,
+		Action: "method-change", Digest: assignment.Confirmation.Digest, Former: assignment.InvocationID.String(),
+		PriorRun: s.Prior.Run, PriorSHA: s.Prior.SHA})
 }
 
 func handoffRecovery(ctx context.Context, card reportjob.Card, prev conversation.Envelope, run conversation.Run, assignment agentcontract.Assignment, invocation string) error {
