@@ -322,7 +322,10 @@ func (x *reportRequest) restore(ctx context.Context) ([]byte, error) {
 		return nil, errors.New("download unavailable")
 	}
 	data, err := src.Download(ctx, a.FileID, a.Size)
-	if err != nil || int64(len(data)) != a.Size || attachments.Hash(data) != a.SHA256 {
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) != a.Size || attachments.Hash(data) != a.SHA256 {
 		return nil, errors.New("checkpoint changed")
 	}
 	if err := x.permit(ctx, a.SHA256, "restore"); err != nil {
