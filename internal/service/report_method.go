@@ -16,6 +16,9 @@ func reportRank(s *reportjob.Stage) [3]int {
 	method := 0
 	if s.Method != nil {
 		method = 1
+		if s.Method.Previous != nil {
+			method = 2
+		}
 	}
 	return [3]int{s.Number, method, s.Attempt}
 }
@@ -24,7 +27,27 @@ func laterReport(a, b [3]int) bool { return slices.Compare(a[:], b[:]) > 0 }
 
 func reservedMethodCommand(text, username string) bool {
 	words := strings.Fields(text)
-	return len(words) >= 2 && words[0] == "@"+username && words[1] == "/report-upgrade"
+	return len(words) >= 2 && words[0] == "@"+username && (words[1] == "/report-upgrade" || words[1] == "/report-upgrade-from-checkpoint")
+}
+
+var loadSecondApproval = reportjob.LoadSecondApproval
+
+func approvedMethod(s reportjob.Stage, card reportjob.Card, user string) (name, command string, err error) {
+	a, err := loadMethodApproval(card)
+	if err != nil {
+		return "", "", err
+	}
+	if s.Method.Previous == nil {
+		if !s.Method.Approved(a, card) {
+			return "", "", errReportBinding
+		}
+		return a.FileName, a.Command(user), nil
+	}
+	next, err := loadSecondApproval(card, a)
+	if err != nil || !s.ApprovedSecond(card, a, next) {
+		return "", "", errReportBinding
+	}
+	return next.FileName, next.Command(user), nil
 }
 
 func reportMethodInputBound(env conversation.Envelope, card reportjob.Card) bool {
@@ -32,8 +55,8 @@ func reportMethodInputBound(env conversation.Envelope, card reportjob.Card) bool
 		return true
 	}
 	u := env.Report.Method
-	a, err := loadMethodApproval(card)
-	if err != nil || !u.Approved(a, card) || env.Anchor != u.Post || len(env.Request.Files) != 1 || env.Request.Files[0].FileID != u.File || env.Request.Files[0].Name != a.FileName {
+	name, _, err := approvedMethod(*env.Report, card, "")
+	if err != nil || env.Anchor != u.Post || len(env.Request.Files) != 1 || env.Request.Files[0].FileID != u.File || env.Request.Files[0].Name != name {
 		return false
 	}
 	return slices.Contains(env.Versions, conversation.Version{ID: u.Post, Hash: u.PostHash})
@@ -60,31 +83,41 @@ func (e *Engine) reportCommand(ctx context.Context, card reportjob.Card, env con
 		}
 		return post, nil
 	}
-	a, err := loadMethodApproval(card)
-	if err != nil || !u.Approved(a, card) || post.EditAt != 0 || post.ID != u.Post || conversation.PostVersion(post).Hash != u.PostHash ||
-		len(post.FileIDs) != 1 || post.FileIDs[0] != u.File || !reportjob.MatchesMethodCommand(post.Message, e.Bot.Username, a) {
-		return empty, errReportOrigin
+	current := post
+	stage := *env.Report
+	for u != nil {
+		stage.Method = u
+		name, command, err := approvedMethod(stage, card, e.Bot.Username)
+		if err != nil || current.EditAt != 0 || current.ID != u.Post || conversation.PostVersion(current).Hash != u.PostHash ||
+			len(current.FileIDs) != 1 || current.FileIDs[0] != u.File || strings.TrimSpace(current.Message) != command {
+			return empty, errReportOrigin
+		}
+		info, err := e.MM.File(ctx, u.File)
+		if err != nil {
+			return empty, err
+		}
+		if info.ID != u.File || info.UserID != card.Actor || info.PostID != u.Post || info.Name != name {
+			return empty, errReportOrigin
+		}
+		before, err := e.MM.Post(ctx, u.Original)
+		if err != nil {
+			return empty, err
+		}
+		v := conversation.PostVersion(before)
+		if !valid(before) || v.ID != u.Original || v.Hash != u.OriginalHash || v.EditedAt != u.OriginalEdited || current.CreateAt <= before.CreateAt {
+			return empty, errReportOrigin
+		}
+		current, u = before, u.Previous
 	}
-	info, err := e.MM.File(ctx, u.File)
-	if err != nil {
-		return empty, err
-	}
-	if info.ID != u.File || info.UserID != card.Actor || info.PostID != u.Post || info.Name != a.FileName {
-		return empty, errReportOrigin
-	}
-	original, err := e.MM.Post(ctx, u.Original)
-	if err != nil {
-		return empty, err
-	}
-	v := conversation.PostVersion(original)
-	if !valid(original) || v.ID != u.Original || v.Hash != u.OriginalHash || v.EditedAt != u.OriginalEdited || !reportjob.MatchesCommand(original.Message, e.Bot.Username, card) {
+	if !reportjob.MatchesCommand(current.Message, e.Bot.Username, card) {
 		return empty, errReportOrigin
 	}
 	return post, nil
 }
 
 func (e *Engine) requestedMethod(card reportjob.Card, prev conversation.Envelope, original mattermost.Post, posts []mattermost.Post) (*reportjob.MethodRevision, error) {
-	if prev.Report.Method != nil {
+	prior := prev.Report.Method
+	if prior != nil && (prior.Previous != nil || prev.Report.Attempt != 3 || prev.Report.Diagnostic || prev.Report.Storage == "" || prev.Report.Prior == nil) {
 		return nil, nil
 	}
 	var selected *reportjob.MethodRevision
@@ -99,7 +132,22 @@ func (e *Engine) requestedMethod(card reportjob.Card, prev conversation.Envelope
 		if err != nil {
 			return nil, err
 		}
-		if !reportjob.MatchesMethodCommand(post.Message, e.Bot.Username, a) {
+		command, from, to, digest := a.Command(e.Bot.Username), a.From, a.To, a.Digest()
+		if prior != nil {
+			if strings.Fields(post.Message)[1] != "/report-upgrade-from-checkpoint" {
+				continue
+			}
+			next, err := loadSecondApproval(card, a)
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, nil
+			}
+			if err != nil || !next.Valid(card, a) || !prior.Approved(a, card) ||
+				next.Stage != prev.Report.Number || next.Position != prev.Report.Prior.Position || next.Checkpoint != prev.Report.Prior.SHA {
+				return nil, errReportBinding
+			}
+			command, from, to, digest = next.Command(e.Bot.Username), next.From, next.To, next.Digest()
+		}
+		if strings.TrimSpace(post.Message) != command {
 			continue
 		}
 		if selected != nil || post.ID == original.ID || post.CreateAt <= original.CreateAt || post.EditAt != 0 || len(post.FileIDs) != 1 {
@@ -109,7 +157,7 @@ func (e *Engine) requestedMethod(card reportjob.Card, prev conversation.Envelope
 		selected = &reportjob.MethodRevision{
 			Original: before.ID, OriginalHash: before.Hash, OriginalEdited: before.EditedAt,
 			Post: after.ID, PostHash: after.Hash, File: post.FileIDs[0],
-			From: a.From, To: a.To, Approval: a.Digest(),
+			From: from, To: to, Approval: digest, Previous: prior,
 		}
 	}
 	return selected, nil
@@ -121,9 +169,9 @@ func sameReportLineage(source, dst conversation.Envelope) bool {
 		return prior == nil && source.Anchor == dst.Anchor
 	}
 	if dst.Report.Number == u.First {
-		return prior == nil && srcWasOriginal(source, u)
+		return (prior == nil && u.Previous == nil || prior != nil && u.Previous != nil && prior.Match(*u.Previous)) && srcWasOriginal(source, u)
 	}
-	return prior != nil && *prior == *u && source.Anchor == dst.Anchor
+	return prior != nil && prior.Match(*u) && source.Anchor == dst.Anchor
 }
 
 func srcWasOriginal(source conversation.Envelope, u *reportjob.MethodRevision) bool {

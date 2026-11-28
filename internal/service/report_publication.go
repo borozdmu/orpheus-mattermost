@@ -84,8 +84,16 @@ func recoveredCalculationRetry(env conversation.Envelope, run conversation.Run) 
 		run.FinishedAt == nil || len(run.Hooks) != 1 {
 		return false
 	}
+	return signedPreUploadStop(env, run)
+}
+
+func signedPreUploadStop(env conversation.Envelope, run conversation.Run) bool {
+	if run.Status != "failed" || run.CancelRequested || run.FinishedAt == nil || len(run.Hooks) != 1 {
+		return false
+	}
 	h := run.Hooks[0]
-	if h.StartedAt == nil || h.DeadlineAt == nil || h.FinishedAt == nil || !h.FinishedAt.After(*h.StartedAt) ||
+	if h.Name != "before_run" || h.Status != "failed" || h.Completeness != "complete" ||
+		h.StartedAt == nil || h.FinishedAt == nil || h.DeadlineAt == nil || !h.FinishedAt.After(*h.StartedAt) ||
 		!h.FinishedAt.Before(*h.DeadlineAt) || h.FinishedAt.After(*run.FinishedAt) {
 		return false
 	}
@@ -99,6 +107,28 @@ func recoveredCalculationRetry(env conversation.Envelope, run conversation.Run) 
 	witness, rest, ok := strings.Cut(output, "\n")
 	return ok && rest == "Mattermost file hook failed: stage=report_calculation; validation failed: report calculation did not finish this stage\n" &&
 		strings.HasPrefix(witness, "report-retry-v1 ") && reportHookWitness(env, run, "retry-before-upload", "report-retry-v1")
+}
+
+func secondMethodBoundary(env conversation.Envelope, run conversation.Run) bool {
+	s := env.Report
+	return s != nil && s.Attempt == 3 && !s.Diagnostic && s.Storage != "" && s.Recovery == "" &&
+		s.Method != nil && s.Method.Previous == nil && s.Prior != nil && signedPreUploadStop(env, run)
+}
+
+func retireForSecondMethod(ctx context.Context, card reportjob.Card, prev conversation.Envelope, run conversation.Run, assignment agentcontract.Assignment, invocation string) error {
+	journal, err := openPublication(card)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = journal.File.Close() }()
+	a, s := journal.Approval, prev.Report
+	if !a.Valid(card) || a.Registration() != s.Storage || a.Stage != s.Number || a.Method != s.Method.To ||
+		a.Original != s.Method.Original || a.Upgrade != s.Method.Post || a.CheckpointPost != s.Prior.Post ||
+		a.Checkpoint != s.Prior.SHA || a.Position != s.Prior.Position {
+		return errReportBinding
+	}
+	return journal.Record(ctx, reportjob.PublicationEvent{Stage: s.Number, Run: run.ID, Invocation: invocation,
+		Action: "method-change", Digest: assignment.Confirmation.Digest})
 }
 
 func handoffRecovery(ctx context.Context, card reportjob.Card, prev conversation.Envelope, run conversation.Run, assignment agentcontract.Assignment, invocation string) error {

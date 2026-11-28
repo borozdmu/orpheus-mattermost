@@ -142,7 +142,9 @@ type publicationState struct {
 	result    PublicationEvent
 	last      string
 	claim     string
+	original  PublicationEvent
 	handedOff bool
+	replaced  bool
 }
 
 func (s *publicationState) apply(v PublicationEvent) (bool, error) {
@@ -156,10 +158,22 @@ func (s *publicationState) apply(v PublicationEvent) (bool, error) {
 			return false, conflict
 		}
 		s.claim = v.Invocation
-	case "handoff":
-		if s.claim == "" || s.handedOff || s.claim == v.Invocation || s.last != "" ||
+		s.original = v
+	case "handoff", "method-change":
+		if s.claim == "" || s.replaced || s.handedOff != (v.Action == "method-change") || s.claim == v.Invocation || s.last != "" ||
 			s.opens[v.Run] != s.claim+" "+v.Digest {
 			return false, conflict
+		}
+		if v.Action == "method-change" {
+			if len(s.opens) != 2 {
+				return false, conflict
+			}
+			for _, old := range s.opens {
+				if strings.HasPrefix(old, v.Invocation+" ") {
+					return false, conflict
+				}
+			}
+			s.replaced = true
 		}
 		s.claim = v.Invocation
 		s.handedOff = true
@@ -265,6 +279,10 @@ func (p *Publication) visit(ctx context.Context, v PublicationEvent, write bool)
 		}
 	}
 	current := state(v.Stage)
+	if write && v.Action == "method-change" && (current.original.Run != p.Approval.Run ||
+		current.original.Stage != p.Approval.Stage || current.original.Digest != p.Approval.Digest()) {
+		return errors.New("historical recovery proof changed")
+	}
 	if !write {
 		if current.last != "" || current.claim != "" && current.claim != v.Invocation {
 			return errors.New("unsettled report publication")

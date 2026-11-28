@@ -126,3 +126,27 @@ then records the transfer of publication to a fresh invocation under the
 same file lock used for a result. A delayed request from the former run
 can no longer publish. A missing opening, an uncertain submission or an
 unknown hook outcome stops the job. Each stage has at most three retries.
+
+### Change the method after the remaining retry
+
+After the last retry of an audited recovery, a second method can take over
+from the same native checkpoint. The first approval stays mounted. A separate
+root-owned read-only file at `MM_REPORT_SECOND_METHOD_APPROVAL` uses schema
+`orpheus.mattermost.method-approval.v2`. Its fields bind the original job and
+card, the first approval digest, both program digests, the new filename, and
+the checkpoint digest, position and stage. The original person attaches the
+approved program to a new post in the original thread with this command:
+
+```text
+@<bot> /report-upgrade-from-checkpoint <job UUID> <old program SHA-256> <new program SHA-256> <position> <checkpoint SHA-256>
+```
+
+The receiver verifies all three native posts, the original recipients and
+current source access. It checks the previous native checkpoint and requires
+a complete signed stop before output. The protected journal must still
+contain the historical claim, its opening, its single handoff and the final
+retry's opening. An exclusive lock serializes the method change with any
+earlier writer. The new invocation may publish one result for that stage.
+If Core did not acknowledge the new invocation, check its actual state
+before any further action. A confirmed checkpoint starts the next ordinary
+stage. An uncertain upload or incomplete journal stops the transfer.
