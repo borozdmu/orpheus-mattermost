@@ -139,6 +139,8 @@ type Stage struct {
 	Number     int             `json:"stage"`
 	Attempt    int             `json:"attempt,omitzero"`
 	Diagnostic bool            `json:"diagnostic_replay,omitzero"`
+	Recovery   string          `json:"operator_recovery_sha256,omitzero"`
+	Storage    string          `json:"publication_storage_sha256,omitzero"`
 	RetryRun   string          `json:"retry_run,omitzero"`
 	Prior      *Output         `json:"previous,omitempty"`
 	Method     *MethodRevision `json:"method_revision,omitempty"`
@@ -152,6 +154,12 @@ func (s Stage) Valid(c Card) bool {
 		return false
 	}
 	if s.Diagnostic && (s.Number < 2 || s.Attempt != 1) {
+		return false
+	}
+	if s.Storage != "" && !sha.MatchString(s.Storage) {
+		return false
+	}
+	if s.Recovery != "" && (!sha.MatchString(s.Recovery) || s.Storage == "" || s.Diagnostic || s.Method == nil || s.Attempt != 2 || s.Number < 2) {
 		return false
 	}
 	if s.Number == 1 {
@@ -175,6 +183,18 @@ func (s Stage) Token(secret, invocation, assignment string, observed time.Time) 
 }
 
 func (s Stage) Invocation(anchor uuid.UUID) uuid.UUID {
+	logical := s.logicalInvocation(anchor)
+	if s.Storage == "" {
+		return logical
+	}
+	return uuid.NewSHA1(logical, []byte("orpheus.mattermost.report-storage-invocation.v1:"+s.Storage))
+}
+
+func (s Stage) logicalInvocation(anchor uuid.UUID) uuid.UUID {
+	if s.Recovery != "" {
+		b, _ := json.Marshal([]any{"orpheus.mattermost.audited-recovery.v1", s.Job, s.Number, s.Method, s.Prior, s.Attempt, s.RetryRun, s.Recovery})
+		return uuid.NewSHA1(anchor, b)
+	}
 	if s.Method != nil {
 		domain := "orpheus.mattermost.method-invocation.v1"
 		if s.Diagnostic {

@@ -71,7 +71,12 @@ func (e *Engine) attachFirstReport(ctx context.Context, p *pending, snap convers
 	p.Session = ""
 	p.Envelope.Request.PreviousIndex = ""
 	p.Envelope.Request.DeliveredBatches = nil
-	p.Envelope.Report = &reportjob.Stage{Job: card.Job, Number: 1, Card: card.Digest()}
+	storage, err := reportStorage(card, "")
+	if err != nil {
+		return err
+	}
+	p.Envelope.Report = &reportjob.Stage{Job: card.Job, Number: 1, Card: card.Digest(), Storage: storage}
+	p.Envelope.AccessContext.InvocationID = p.Envelope.Report.Invocation(key.Invocation(p.Envelope.Anchor))
 	return nil
 }
 
@@ -156,12 +161,19 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 	if err != nil || previousSession.ExternalKey != key.External() || run.SessionID != previousSession.ID || !reportInputBound(w, old, card) {
 		return true, errReportBinding
 	}
-	if _, err = reportAssignment(old, card, e.SourceID); err != nil {
+	previousAssignment, err := reportAssignment(old, card, e.SourceID)
+	if err != nil {
 		return true, err
 	}
 	receipt, artifact, err := e.reportReceipt(ctx, p, prev, run)
 	if err != nil {
 		return true, err
+	}
+	if receipt != nil && prev.Report.Storage != "" {
+		req := reportRequest{e: e, card: card, env: prev, run: run, assignment: previousAssignment}
+		if err = req.recordPublication(ctx, "receipt", artifact.SHA256); err != nil {
+			return true, err
+		}
 	}
 	if receipt != nil && artifact.Name != reportjob.CheckpointName {
 		return false, nil
@@ -197,7 +209,22 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 			return false, nil
 		}
 		diagnostic := legacyCalculationFailure(prev, run) || sourceCalculationFailure(prev, run)
-		if submitted || prev.Report.Diagnostic || prev.Report.Attempt >= 3 || (!diagnostic && !reportHookWitness(prev, run, "retry-before-upload", "report-retry-v1") && !legacyInitialMethodRefusal(prev, run)) {
+		var recovery string
+		if !submitted && prev.Report.Diagnostic && run.Error == "service_credentials_expired" {
+			journal, openErr := openPublication(card)
+			if openErr != nil {
+				return true, openErr
+			}
+			approval := journal.Approval
+			if closeErr := journal.File.Close(); closeErr != nil {
+				return true, closeErr
+			}
+			if historicalRecovery(prev, run, previousAssignment, approval, card, time.Now()) {
+				recovery = approval.Digest()
+			}
+		}
+		ordinaryRetry := !prev.Report.Diagnostic && prev.Report.Attempt < 3 && (diagnostic || reportHookWitness(prev, run, "retry-before-upload", "report-retry-v1") || legacyInitialMethodRefusal(prev, run))
+		if submitted || prev.Report.Recovery != "" || recovery == "" && !ordinaryRetry {
 			// Only an explicit digest/position receipt can start a subsequent stage.
 			// A single technical notice remains visible if the stage stopped earlier.
 			if err := e.reportStop(ctx, w, prev, run, p); err != nil {
@@ -208,6 +235,7 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 		nextStage = *prev.Report
 		nextStage.Attempt++
 		nextStage.Diagnostic = diagnostic
+		nextStage.Recovery = recovery
 		nextStage.RetryRun = run.ID
 		notBefore := run.FinishedAt
 		if notBefore == nil || time.Now().Before(notBefore.Add(time.Minute*time.Duration(1<<(nextStage.Attempt-1)))) {
@@ -219,6 +247,23 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 				return true, err
 			}
 		}
+	}
+	if receipt == nil && prev.Report.Storage != "" {
+		j, openErr := openPublication(card)
+		if openErr != nil {
+			return true, openErr
+		}
+		defer func() { _ = j.File.Close() }()
+		if prev.Report.Storage != j.Approval.Registration() {
+			return true, errReportBinding
+		}
+		if err = j.CheckUnsubmitted(ctx, reportjob.PublicationEvent{Stage: prev.Report.Number, Run: run.ID, Invocation: previousAssignment.InvocationID.String(), Digest: previousAssignment.Confirmation.Digest}); err != nil {
+			return true, err
+		}
+	}
+	nextStage.Storage, err = reportStorage(card, prev.Report.Storage)
+	if err != nil {
+		return true, err
 	}
 	if replacement != nil {
 		replacement.First = nextStage.Number
@@ -258,6 +303,14 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 		// Refuse a mismatched native upload before establishing a new method
 		// generation. Both consent posts are rechecked after this bounded read.
 		if _, err := e.readBoundFile(ctx, w, next.Envelope, env.Request.Files[0], replacement.To); err != nil {
+			return true, err
+		}
+	}
+	if nextStage.Recovery != "" {
+		if _, err = e.reportCommand(ctx, card, next.Envelope); err != nil {
+			return true, err
+		}
+		if err = claimRecovery(ctx, card, nextStage, next.Envelope.AccessContext.InvocationID.String()); err != nil {
 			return true, err
 		}
 	}
