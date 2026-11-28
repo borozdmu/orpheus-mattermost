@@ -124,6 +124,9 @@ type Message struct {
 	CreatedAt   time.Time
 }
 type Hook struct {
+	StartedAt    *time.Time
+	DeadlineAt   *time.Time
+	FinishedAt   *time.Time
 	Name         string
 	Status       string
 	Completeness string

@@ -162,7 +162,7 @@ func run(r api.Run) conversation.Run {
 		v.FinalMessageID = r.FinalMessage.ID.String()
 	}
 	for _, h := range r.Hooks {
-		item := conversation.Hook{Name: string(h.Name), Status: string(h.Status), Completeness: string(h.OutputCompleteness)}
+		item := conversation.Hook{StartedAt: h.StartedAt, DeadlineAt: h.DeadlineAt, FinishedAt: h.FinishedAt, Name: string(h.Name), Status: string(h.Status), Completeness: string(h.OutputCompleteness)}
 		if h.Output != nil {
 			data, err := h.Output.AsTextResult()
 			if err == nil {

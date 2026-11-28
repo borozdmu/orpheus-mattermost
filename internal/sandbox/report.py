@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import urllib.error
 import urllib.request
 
 
@@ -22,7 +23,17 @@ def report_exchange(protocol, http, endpoint, cap, run, session, action, limit, 
         headers['X-Artifact-Name'] = name
     def read():
         req = urllib.request.Request(endpoint + '/' + action, data=data, headers=headers)
-        with http.open(req, timeout=225) as response:
+        try:
+            response = http.open(req, timeout=225)
+        except urllib.error.HTTPError as error:
+            reason = error.headers.get('X-Orpheus-Report-Reason') if error.headers else None
+            if reason not in ('request', 'stage', 'window', 'origin', 'binding', 'admission',
+                              'method', 'checkpoint', 'result'):
+                reason = 'unidentified'
+            # Never read a remote error body or print its headers verbatim.
+            print('report-http-v1 ' + action + ' ' + reason + ' ' + str(int(error.code)), flush=True)
+            raise
+        with response:
             body = response.read(limit + 1)
             protocol['require'](len(body) <= limit, 'report response too large')
             return body
@@ -33,7 +44,7 @@ def report_exchange(protocol, http, endpoint, cap, run, session, action, limit, 
         with protocol['step']('report_submission'):
             return read()
     try:
-        return protocol['read_input']('report_exchange', read)
+        return protocol['read_input']('report_' + action, read)
     except protocol['HookFailure'] as error:
         if protocol['transient_read'](error.cause):
             report_marker(cap, run, 'retry-before-upload', 'report-retry-v1')
