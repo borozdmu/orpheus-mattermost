@@ -120,7 +120,7 @@ func (e *Engine) confirmCorporate(ctx context.Context, a agentcontract.Assignmen
 	}
 	roster, _, err := e.confirmAudience(ctx, *w, key)
 	if err != nil {
-		return denied
+		return errors.Join(denied, err)
 	}
 	readers, err := corporateReaders(*w, roster)
 	if err != nil {
@@ -130,7 +130,7 @@ func (e *Engine) confirmCorporate(ctx context.Context, a agentcontract.Assignmen
 	copy.Readers = readers
 	descriptor, err := e.describeAudience(ctx, *w, key, roster)
 	if err != nil {
-		return denied
+		return errors.Join(denied, err)
 	}
 	copy.Audience = descriptor
 	if copy.Digest() != a.Digest() {

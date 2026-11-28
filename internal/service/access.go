@@ -11,6 +11,7 @@ import (
 	"github.com/orpheus-agents/orpheus-mattermost/internal/config"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/conversation"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/mattermost"
+
 	"github.com/orpheus-agents/orpheus/agentcontract"
 	api "github.com/orpheus-agents/orpheus/client"
 )
@@ -173,7 +174,15 @@ func protectedContract(s *conversation.Session, r *conversation.Run, w config.Wo
 		return env, err
 	}
 	a := env.AccessContext
-	if validateProtectedContext(env, w) != nil || env.ContextStart == nil || env.ContextStart.CreatedAt <= 0 || !config.ValidID(env.ContextStart.PostID) || env.Key() != key || a.InvocationID != key.Invocation(env.Anchor) {
+	invocation := key.Invocation(env.Anchor)
+	if env.Report != nil {
+		card, readErr := loadReportCard()
+		if readErr != nil || !env.Report.Valid(card) {
+			return env, errors.New("unknown report admission")
+		}
+		invocation = env.Report.Invocation(invocation)
+	}
+	if validateProtectedContext(env, w) != nil || env.ContextStart == nil || env.ContextStart.CreatedAt <= 0 || !config.ValidID(env.ContextStart.PostID) || env.Key() != key || a.InvocationID != invocation {
 		return env, errors.New("unknown protected context provenance")
 	}
 	return env, nil

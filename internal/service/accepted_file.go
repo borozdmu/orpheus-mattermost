@@ -59,13 +59,14 @@ func (e *Engine) CheckAcceptedFile(ctx context.Context, w config.Workflow, key c
 				return 0, errors.New("file absent from accepted trigger")
 			}
 			observer := Engine{MM: e.MM, API: e.API, Config: e.Config, Bot: bot}
-			return observer.checkBoundFile(ctx, w, env, env.Request.Files[i], sha)
+			data, err := observer.readBoundFile(ctx, w, env, env.Request.Files[i], sha)
+			return int64(len(data)), err
 		}
 	}
 	return 0, errors.New("accepted run not found in thread")
 }
 
-func (e *Engine) checkBoundFile(ctx context.Context, w config.Workflow, env conversation.Envelope, file attachments.InputFile, sha string) (int64, error) {
+func (e *Engine) readBoundFile(ctx context.Context, w config.Workflow, env conversation.Envelope, file attachments.InputFile, sha string) ([]byte, error) {
 	check := func() error {
 		audience, _, err := e.confirmAudience(ctx, w, env.Key())
 		if err != nil {
@@ -85,17 +86,17 @@ func (e *Engine) checkBoundFile(ctx context.Context, w config.Workflow, env conv
 		return e.workflowGate(ctx, w, env, audience, []string{post.UserID})
 	}
 	if err := check(); err != nil {
-		return 0, err
+		return nil, err
 	}
 	infos, err := e.MM.Files(ctx, file.PostID)
 	if err != nil {
-		return 0, inputHTTPError("post file list", err)
+		return nil, inputHTTPError("post file list", err)
 	}
 	found := 0
 	for _, info := range infos {
 		if info.ID == file.FileID {
 			if info.PostID != file.PostID || info.Size != file.Size || info.MIME != file.MIME || info.Name != file.Name {
-				return 0, errors.New("accepted attachment metadata changed")
+				return nil, errors.New("accepted attachment metadata changed")
 			}
 			found++
 		}
@@ -106,25 +107,25 @@ func (e *Engine) checkBoundFile(ctx context.Context, w config.Workflow, env conv
 	}
 	maxBytes = min(maxBytes, w.Files.MaxBatchBytes, env.Request.Limits.MaxBatchBytes)
 	if found != 1 || file.Size < 0 || file.Size > maxBytes {
-		return 0, errors.New("accepted file absent or outside limits")
+		return nil, errors.New("accepted file absent or outside limits")
 	}
 	source, ok := e.MM.(interface {
 		Download(context.Context, string, int64) ([]byte, error)
 	})
 	if !ok {
-		return 0, errors.New("attachment download unsupported")
+		return nil, errors.New("attachment download unsupported")
 	}
 	data, err := source.Download(ctx, file.FileID, file.Size)
 	if err != nil {
-		return 0, inputHTTPError("file download", err)
+		return nil, inputHTTPError("file download", err)
 	}
 	if int64(len(data)) != file.Size || attachments.Hash(data) != sha {
-		return 0, errors.New("accepted file size or digest mismatch")
+		return nil, errors.New("accepted file size or digest mismatch")
 	}
 	if err := check(); err != nil {
-		return 0, err
+		return nil, err
 	}
-	return file.Size, nil
+	return data, nil
 }
 
 func inputHTTPError(stage string, err error) error {
