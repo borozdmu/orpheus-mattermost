@@ -50,6 +50,11 @@ func (c *connectorMetrics) Collect(ch chan<- prometheus.Metric) {
 		r := source.runtime
 		inputs, outputs, uncertain := r.Engine.queues()
 		r.mu.Lock()
+		// A reserved admission is already busy before Core can return a run.
+		active := 0
+		for _, n := range r.active {
+			active += n
+		}
 		suspended := 0
 		for _, job := range r.jobs {
 			if job.Retry.Permanent {
@@ -61,7 +66,7 @@ func (c *connectorMetrics) Collect(ch chan<- prometheus.Metric) {
 			float64(inputs), float64(outputs), uncertain.Seconds(),
 			float64(r.cycles.Load()), float64(r.failures.Load()), float64(r.reconnects.Load()), float64(r.retries.Load()),
 			float64(r.cycleNanos.Load()) / 1e9, float64(r.cycles.Load()),
-			float64(r.lastSuccess.Load()), float64(r.replayLag.Load()) / 1e9, float64(r.activeRuns.Load()),
+			float64(r.lastSuccess.Load()), float64(r.replayLag.Load()) / 1e9, float64(active),
 			float64(suspended),
 		}
 		labels := []string(nil)
