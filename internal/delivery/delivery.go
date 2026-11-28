@@ -21,23 +21,26 @@ var ErrConflict = errors.New("delivery receipt conflict")
 var ErrUpload = errors.New("attachment requires upload recovery")
 
 type Receipt struct {
-	Temporary     bool                   `json:"temporary,omitzero"`
-	CostFooter    string                 `json:"cost_footer,omitzero"`
-	Schema        int                    `json:"schema"`
-	Source        string                 `json:"source"`
-	Workflow      string                 `json:"workflow"`
-	SessionID     string                 `json:"session_id"`
-	RunID         string                 `json:"run_id"`
-	MessageID     string                 `json:"message_id"`
-	Part          int                    `json:"part"`
-	Parts         int                    `json:"parts"`
-	Hash          string                 `json:"content_sha256"`
-	Attachments   []attachments.Artifact `json:"attachments"`
-	RenderVersion int                    `json:"render_version"`
-	TriggerIDs    []string               `json:"trigger_post_ids,omitempty"`
-	InputHash     string                 `json:"input_hash,omitempty"`
-	Revision      string                 `json:"revision,omitempty"`
-	InputVersions []conversation.Version `json:"input_versions,omitempty"`
+	ReportJob      string                 `json:"report_job,omitzero"`
+	ReportStage    int                    `json:"report_stage,omitzero"`
+	ReportPosition int64                  `json:"report_position,omitzero"`
+	Temporary      bool                   `json:"temporary,omitzero"`
+	CostFooter     string                 `json:"cost_footer,omitzero"`
+	Schema         int                    `json:"schema"`
+	Source         string                 `json:"source"`
+	Workflow       string                 `json:"workflow"`
+	SessionID      string                 `json:"session_id"`
+	RunID          string                 `json:"run_id"`
+	MessageID      string                 `json:"message_id"`
+	Part           int                    `json:"part"`
+	Parts          int                    `json:"parts"`
+	Hash           string                 `json:"content_sha256"`
+	Attachments    []attachments.Artifact `json:"attachments"`
+	RenderVersion  int                    `json:"render_version"`
+	TriggerIDs     []string               `json:"trigger_post_ids,omitempty"`
+	InputHash      string                 `json:"input_hash,omitempty"`
+	Revision       string                 `json:"revision,omitempty"`
+	InputVersions  []conversation.Version `json:"input_versions,omitempty"`
 }
 type Part struct {
 	Receipt Receipt
@@ -211,6 +214,10 @@ func (p *Publisher) Publish(ctx context.Context, part Part) error {
 	}
 	return err
 }
+
+// PublishOnce reconciles one attachment and never creates a separate repair post.
+func (p *Publisher) PublishOnce(ctx context.Context, part Part) error { return p.publishOne(ctx, part) }
+
 func (p *Publisher) publishOne(ctx context.Context, part Part) error {
 	post, r, found, e := p.find(part)
 	if e != nil {

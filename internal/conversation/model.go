@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/attachments"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/config"
+	"github.com/orpheus-agents/orpheus-mattermost/internal/reportjob"
 	api "github.com/orpheus-agents/orpheus/client"
 )
 
@@ -70,6 +71,7 @@ func (k Key) Invocation(anchor string) uuid.UUID {
 }
 
 type Envelope struct {
+	Report        *reportjob.Stage    `json:"report_job,omitzero"`
 	LocalFiles    bool                `json:"local_files,omitzero"`
 	AccessContext *api.AccessContext  `json:"access_context,omitzero"`
 	AccessProof   *AccessProof        `json:"access_proof,omitzero"`
@@ -128,21 +130,23 @@ type Hook struct {
 	Output       string
 }
 type Run struct {
-	Usage          api.Usage
-	ID             string
-	SessionID      string
-	Number         int
-	Status         string
-	Observation    string
-	Error          string
-	ErrorMessage   string
-	StopReason     string
-	AgentStatus    string
-	Hooks          []Hook
-	FinalMessageID string
-	CreatedAt      time.Time
-	FinishedAt     *time.Time
-	DeadlineAt     *time.Time
+	Phase           string
+	CancelRequested bool
+	Usage           api.Usage
+	ID              string
+	SessionID       string
+	Number          int
+	Status          string
+	Observation     string
+	Error           string
+	ErrorMessage    string
+	StopReason      string
+	AgentStatus     string
+	Hooks           []Hook
+	FinalMessageID  string
+	CreatedAt       time.Time
+	FinishedAt      *time.Time
+	DeadlineAt      *time.Time
 }
 
 func (r Run) Terminal() bool {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -18,7 +19,9 @@ import (
 	"github.com/orpheus-agents/orpheus-mattermost/internal/attachments"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/config"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/conversation"
+	"github.com/orpheus-agents/orpheus-mattermost/internal/reportjob"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/sandbox"
+	"github.com/orpheus-agents/orpheus/agentcontract"
 	api "github.com/orpheus-agents/orpheus/client"
 )
 
@@ -147,7 +150,10 @@ func (c *Client) Runs(ctx context.Context, id string) ([]conversation.Run, error
 	return result, nil
 }
 func run(r api.Run) conversation.Run {
-	v := conversation.Run{Usage: r.Usage, ID: r.ID.String(), SessionID: r.SessionID.String(), Number: r.Number, Status: string(r.Status), Observation: ptr(r.Observation), AgentStatus: ptr(r.AgentStatus), StopReason: ptr(r.StopReason), CreatedAt: r.CreatedAt, FinishedAt: r.FinishedAt, DeadlineAt: r.DeadlineAt}
+	v := conversation.Run{CancelRequested: r.CancelRequestedAt != nil, Usage: r.Usage, ID: r.ID.String(), SessionID: r.SessionID.String(), Number: r.Number, Status: string(r.Status), Observation: ptr(r.Observation), AgentStatus: ptr(r.AgentStatus), StopReason: ptr(r.StopReason), CreatedAt: r.CreatedAt, FinishedAt: r.FinishedAt, DeadlineAt: r.DeadlineAt}
+	if r.Phase != nil {
+		v.Phase = string(*r.Phase)
+	}
 	if r.Error != nil {
 		v.Error = r.Error.Code
 		v.ErrorMessage = r.Error.Message
@@ -352,6 +358,25 @@ func (c *Client) Submit(ctx context.Context, w config.Workflow, e conversation.E
 		env = map[string]string{}
 		envFrom = []string{}
 	}
+	if stage := e.Report; stage != nil {
+		card, err := reportjob.Load()
+		if err != nil || !stage.Valid(card) || sessionID != "" || runID != "" || localPolicy || access == nil || access.Assignment == nil ||
+			w.AgentID == "" || !slices.Contains(w.Services, "kord") || slices.Contains(w.EnvFrom, w.Mattermost.TokenEnv) {
+			return conversation.Accepted{}, errors.New("invalid native report submission")
+		}
+		a, err := agentcontract.Decode(*access.Assignment)
+		if err != nil {
+			return conversation.Accepted{}, err
+		}
+		token := stage.Token(os.Getenv("ORPHEUS_AUDIENCE_SECRET"), access.InvocationID.String(), a.Confirmation.Digest, access.ContextObservedAt)
+		if token == "" {
+			return conversation.Accepted{}, errors.New("report capability unavailable")
+		}
+		stageJSON, _ := json.Marshal(stage.Manifest())
+		env = map[string]string{"MM_INPUT_MANIFEST": env["MM_INPUT_MANIFEST"], "MM_REPORT_STAGE": string(stageJSON),
+			"MM_REPORT_URL": card.URL + stage.Job, "MM_REPORT_CAPABILITY": token, "MM_REPORT_METHOD_SHA256": card.Method}
+		envFrom = []string{}
+	}
 	var request any
 	var sessionBody api.CreateSession
 	var runBody api.CreateRun
@@ -398,9 +423,18 @@ func (c *Client) Submit(ctx context.Context, w config.Workflow, e conversation.E
 		if len(w.Services) > 0 {
 			conf.Sandbox.Services = &w.Services
 		}
+		if e.Report != nil {
+			// The method has already delivered its single receipt in before_run.
+			instructions := "The registered report method runs before this response. Do not call tools or compute anything. Respond with a short completion acknowledgement."
+			conf.Agent.Instructions = &instructions
+			conf.Hooks = &api.HooksInput{BeforeRun: new(sandbox.ReportBeforeRun()), TimeoutSeconds: new(900)}
+		}
 		namespace := e.Key().Namespace()
 		externalKey := e.Key().External()
 		sessionBody = api.CreateSession{AccessContext: access, AllowMultipleRuns: new(w.Access.MultipleRuns()), Messages: input, Namespace: &namespace, ExternalKey: &externalKey, Configuration: conf, Env: &env, EnvFrom: &envFrom, InputFingerprint: &fingerprint}
+		if e.Report != nil {
+			sessionBody.AllowMultipleRuns = new(false)
+		}
 		request = sessionBody
 		key = e.Key().Operation(e.Anchor, "session", e.Key().External(), predecessor)
 	}
