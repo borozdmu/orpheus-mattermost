@@ -134,6 +134,12 @@ def report_step(protocol):
                 and stage['position'] == 0) or (stage['stage'] > 1 and protocol['valid_run'](stage['previous_run'])
                 and re.fullmatch(r'[0-9a-f]{64}', stage['checkpoint_sha256']) and stage['position'] > 0)),
           'invalid accepted report stage')
+    if 'method_transition' in stage:
+        change = stage['method_transition']
+        check(stage['stage'] > 1 and type(change) is dict and set(change) == {'from_sha256', 'to_sha256'}
+              and type(change['from_sha256']) is str and re.fullmatch(r'[0-9a-f]{64}', change['from_sha256'])
+              and change['to_sha256'] == env['MM_REPORT_METHOD_SHA256'] and change['from_sha256'] != change['to_sha256'],
+              'invalid approved method transition')
     check(len(request['files']) == 1 and not request.get('previous_index') and
           not request.get('delivered_batches'), 'invalid report input count')
     endpoint = env['MM_REPORT_URL']

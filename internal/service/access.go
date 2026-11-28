@@ -172,7 +172,7 @@ func protectedContract(s *conversation.Session, r *conversation.Run, w config.Wo
 	invocation := key.Invocation(env.Anchor)
 	if env.Report != nil {
 		card, readErr := loadReportCard()
-		if readErr != nil || !env.Report.Valid(card) {
+		if readErr != nil || !env.Report.Valid(card) || !reportMethodInputBound(env, card) {
 			return env, errors.New("unknown report admission")
 		}
 		invocation = env.Report.Invocation(invocation)
