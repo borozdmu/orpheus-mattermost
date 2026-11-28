@@ -8,6 +8,8 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.error
+from unittest.mock import Mock, patch
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from email.parser import BytesParser
@@ -41,8 +43,8 @@ class Source:
             raise OSError('denied')
         return dict(id=ID, channel_id=self.channel, file_ids=[FILE])
 
-    def file(self, _id):
-        return dict(id=FILE, post_id=self.file_post, mime_type='image/png', size=len(self.data))
+    def files(self, _id):
+        return [dict(id=FILE, post_id=self.file_post, mime_type='image/png', size=len(self.data))]
 
     def download(self, _id, _limit):
         self.downloads += 1
@@ -117,6 +119,52 @@ class FilesTest(unittest.TestCase):
         self.req['anchor_post_id'] = 'e' * 26
         self.assertEqual(self.store.prepare(self.source, self.req)['files'][0]['status'], 'file_limit_exceeded')
 
+    def test_scoped_metadata_denials_and_faults_are_distinct(self):
+        error = lambda code: urllib.error.HTTPError('private-path', code, 'private-body', {}, None)
+        for code in (301, 401, 403, 404):
+            with self.subTest(code=code):
+                self.source.files = Mock(side_effect=error(code))
+                report = self.store.prepare(self.source, self.req)['files'][0]
+                self.assertEqual(report['status'], 'unavailable')
+                self.assertEqual(report['reason'], f'post_file_info: HTTPError: HTTP {code}')
+                self.source.files.assert_called_once_with(ID)
+        self.assertEqual(self.source.downloads, 0)
+        self.source.files = Mock(side_effect=[error(503), Source().files(ID)])
+        with patch.object(f.time, 'sleep'):
+            self.assertEqual(self.store.prepare(self.source, self.req)['files'][0]['status'], 'ready')
+        self.assertEqual(self.source.files.call_count, 2)
+
+    def test_thread_rebinding_and_hidden_metadata_do_not_use_cached_bytes(self):
+        self.store.prepare(self.source, self.req)
+        post, info = Source().post(ID), Source().files(ID)[0]
+        for patchpost, infos, reason in (
+            ({'root_id': 'd' * 26}, [info], 'outside accepted thread'),
+            ({'id': FILE}, [info], 'association changed'),
+            ({'file_ids': []}, [info], 'association changed'),
+            ({}, [], 'missing or duplicated'),
+            ({}, [info, info], 'missing or duplicated'),
+            ({}, [dict(info, channel_id=FILE)], 'association changed'),
+            ({}, [dict(info, delete_at=1)], 'association changed'),
+        ):
+            with self.subTest(reason=reason):
+                self.source.post = Mock(return_value=dict(post, **patchpost))
+                self.source.files = Mock(return_value=infos)
+                file = self.store.prepare(self.source, self.req)['files'][0]
+                self.assertEqual(file['status'], 'unavailable')
+                self.assertIn(reason, file['reason'])
+        self.assertEqual(self.source.downloads, 1)
+
+    def test_download_denial_then_new_permitted_batch(self):
+        error = urllib.error.HTTPError('private-url', 403, 'private-body', {}, None)
+        self.source.download = Mock(side_effect=error)
+        file = self.store.prepare(self.source, self.req)['files'][0]
+        self.assertEqual(file['reason'], 'file_download: HTTPError: HTTP 403')
+        self.source.download.assert_called_once()
+        self.source.download = Mock(return_value=b'png')
+        ready = self.store.prepare(self.source, self.req)['files'][0]
+        self.assertEqual(ready['sha256'], f.digest(b'png'))
+        self.assertNotIn('reason', ready)
+
     def test_twenty_input_files_and_overflow(self):
         ids = [f'{i:026d}' for i in range(21)]
         original = self.req['files'][0]
@@ -125,8 +173,7 @@ class FilesTest(unittest.TestCase):
                              for file_id in ids]
         self.req['limits']['max_per_post'] = 20
         self.source.post = lambda _id: dict(id=ID, channel_id=ID, file_ids=ids)
-        self.source.file = lambda file_id: dict(id=file_id, post_id=ID,
-                                                mime_type='image/png', size=3)
+        self.source.files = lambda _id: [dict(id=i, post_id=ID, mime_type='image/png', size=3) for i in ids]
         result = self.store.prepare(self.source, self.req)
         self.assertEqual([file['status'] for file in result['files']],
                          ['ready'] * 20 + ['file_limit_exceeded'])
@@ -148,6 +195,7 @@ class FilesTest(unittest.TestCase):
         self.assertEqual(self.source.uploads, [])
 
     def test_link_channel_and_post_association(self):
+        self.req['files'][0]['origin'] = 'linked_thread'
         self.source.channel = 'c' * 26
         self.req['files'][0]['channel_id'] = self.source.channel
         self.assertEqual(self.store.prepare(self.source, self.req)['files'][0]['status'], 'ready')
@@ -303,7 +351,7 @@ store.seal(json.loads(sys.argv[3]))
             def do_GET(self):
                 self.assert_auth()
                 routes = {'users/me': dict(id=ID), 'posts/' + ID: source.post(ID),
-                          'files/' + FILE + '/info': source.file(FILE)}
+                          'posts/' + ID + '/files/info': source.files(ID)}
                 key = self.path.removeprefix('/api/v4/')
                 body = b'png' if key == 'files/' + FILE else f.encode(routes[key])
                 self.send_response(200)

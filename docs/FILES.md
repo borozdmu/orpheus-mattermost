@@ -44,6 +44,19 @@ A reference to an older attachment verifies its cached bytes and restores a
 missing or changed copy;
 it does not download the entire history again.
 
+Preparation checks the current post and its post-scoped attachment list, then
+downloads the exact file ID. A transient GET failure may be retried once. Denials,
+redirects, changed associations and server retry delays are final for that attempt.
+A failed file carries a stage and a safe reason in its manifest. The same reason
+and file position are recorded even when the rest of the hook succeeds.
+
+Operators can use `check-accepted-file -workflow ... -channel ... -root ... -run ... -post ... -file ... -sha256 ...`
+to test a previously delivered protected trigger. Supply the digest from the original
+artifact. The command authenticates the configured receiver, matches the immutable
+Core input and current post version, and rechecks the actor and original audience
+before reading and after hashing. It prints only the confirmed size and digest.
+It creates no runs, posts, files or credentials.
+
 The post's YAML front matter lists incoming files and their expected local paths.
 The hook prepares them before the agent starts; a missing path means the file
 could not be opened. The manifest and index are internal recovery metadata, not

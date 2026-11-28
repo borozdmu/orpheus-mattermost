@@ -4,6 +4,7 @@ import contextlib
 import errno
 import fcntl
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -12,6 +13,7 @@ import socket
 import ssl
 import stat
 import sys
+import time
 import unicodedata
 import urllib.error
 import urllib.request
@@ -271,6 +273,7 @@ class Store:
             total, counts = 0, {}
             for original in request.get('files') or []:
                 file = dict(original)
+                file.pop('reason', None)
                 counts[file['post_id']] = counts.get(file['post_id'], 0) + 1
                 if counts[file['post_id']] > request['limits']['max_per_post']:
                     file['status'] = 'file_limit_exceeded'
@@ -281,7 +284,11 @@ class Store:
                     file['status'] = 'batch_limit_exceeded'
                 else:
                     with self.lock(f"{BASE}/input/files/{file['file_id']}/.lock"):
-                        info, status = inspect_input(source, request, file)
+                        try:
+                            info, status = inspect_input(source, request, file)
+                        except HookFailure as failure:
+                            file['reason'] = input_reason(failure)
+                            info, status = {}, 'unavailable'
                         if status:
                             file['status'] = status
                         elif info['size'] > request['limits']['max_batch_bytes'] - total:
@@ -292,10 +299,11 @@ class Store:
                                 file = cached
                             else:
                                 try:
-                                    data = source.download(file['file_id'], info['size'])
-                                    require(len(data) == info['size'], 'download size mismatch')
-                                except (OSError, ValueError):
-                                    file['status'] = 'download_failed'
+                                    data = read_input('file_download', source.download, file['file_id'], info['size'])
+                                    if len(data) != info['size']:
+                                        raise HookFailure('file_download', ProtocolError('download size mismatch'))
+                                except HookFailure as failure:
+                                    file.update(status='download_failed', reason=input_reason(failure))
                                 else:
                                     file.update(size_bytes=len(data), mime=info['mime_type'],
                                                 sha256=digest(data), status='ready')
@@ -478,15 +486,58 @@ def validate_output(output, export):
     require(len(encode(output)) <= 16384, 'output manifest exceeds limit')
 
 
+def input_reason(failure):
+    # This is also emitted in the Core hook receipt: never include response text.
+    return failure.stage + ': ' + safe_error(failure.cause)
+
+
+def transient_read(error):
+    if isinstance(error, urllib.error.HTTPError):
+        if error.headers and error.headers.get('Retry-After'):
+            return False
+        return error.code in (408, 502, 503, 504)
+    if isinstance(error, urllib.error.URLError):
+        error = error.reason
+    return (isinstance(error, (TimeoutError, socket.timeout, ConnectionError,
+                               http.client.IncompleteRead)) or
+            isinstance(error, socket.gaierror) and error.errno == socket.EAI_AGAIN)
+
+
+def read_input(stage, read, *args):
+    for attempt in range(2):
+        try:
+            return read(*args)
+        except (OSError, ValueError, http.client.HTTPException) as error:
+            retry = not attempt and transient_read(error)
+            if isinstance(error, urllib.error.HTTPError):
+                error.close()
+            if not retry:
+                raise HookFailure(stage, error) from None
+            time.sleep(0.2)
+
+
 def inspect_input(source, request, file):
-    try:
-        post = source.post(file['post_id'])
-        require(not post.get('delete_at') and post['channel_id'] == file['channel_id']
-                and file['file_id'] in (post.get('file_ids') or []), 'unavailable')
-        info = source.file(file['file_id'])
-        require(info['post_id'] == file['post_id'] and info['id'] == file['file_id'], 'unavailable')
-    except (OSError, ValueError, KeyError):
-        return {}, 'unavailable'
+    post = read_input('file_post', source.post, file['post_id'])
+    with step('file_post'):
+        require(isinstance(post, dict) and post.get('id') == file['post_id'] and
+                not post.get('delete_at') and post.get('channel_id') == file['channel_id'] and
+                file['file_id'] in (post.get('file_ids') or []), 'post attachment association changed')
+        if file['origin'] in ('thread', 'thread_reference'):
+            require(post['channel_id'] == request['channel_id'] and
+                    (post.get('root_id') or post['id']) == request['root_id'], 'attachment outside accepted thread')
+    # Use the receiver's post-scoped resource. It rechecks access to the post
+    # and returns the authoritative association, including the server file ID.
+    infos = read_input('post_file_info', source.files, file['post_id'])
+    with step('post_file_info'):
+        require(isinstance(infos, list), 'invalid post attachment metadata')
+        matched = [item for item in infos if isinstance(item, dict) and item.get('id') == file['file_id']]
+        require(len(matched) == 1, 'attachment missing or duplicated on post')
+        info = matched[0]
+        require(info.get('post_id') == file['post_id'] and not info.get('delete_at') and
+                (not info.get('channel_id') or info['channel_id'] == file['channel_id']),
+                'file attachment association changed')
+        require(isinstance(info.get('mime_type'), str) and type(info.get('size')) is int,
+                'invalid file metadata')
     limit = request['limits']['max_image_bytes' if info['mime_type'].startswith('image/') else 'max_file_bytes']
     return info, '' if 0 <= info['size'] <= limit else 'file_limit_exceeded'
 
@@ -515,8 +566,8 @@ class Mattermost:
     def post(self, post_id):
         return json.loads(self.request('posts/' + post_id))
 
-    def file(self, file_id):
-        return json.loads(self.request('files/' + file_id + '/info'))
+    def files(self, post_id):
+        return json.loads(self.request('posts/' + post_id + '/files/info'))
 
     def download(self, file_id, limit):
         return self.request('files/' + file_id, limit)
@@ -581,7 +632,10 @@ def main(command):
             with step('agent_memory_context'):
                 prepare_agent_memory(store)
             with step('input_preparation'):
-                store.prepare(source, request)
+                report = store.prepare(source, request)
+                for index, file in enumerate(report['files']):
+                    if file.get('reason'):
+                        print(f"Mattermost input file {index + 1}: {file['reason']}", file=sys.stderr)
             with step('run_initialization'):
                 store.begin_run(os.environ['ORPHEUS_RUN_ID'], request)
         elif command == 'export-output':
