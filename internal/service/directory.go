@@ -27,6 +27,11 @@ func confirmAccountCards(ctx context.Context, access *config.Access, roster []st
 	if !ok || agent == "" {
 		return denied
 	}
+	resolved, err := resolveLiveHumans(ctx, *access, roster)
+	if err != nil {
+		return err
+	}
+	access = &resolved
 	accounts := map[string]config.SubjectID{}
 	for _, id := range roster {
 		if id == access.BotID {

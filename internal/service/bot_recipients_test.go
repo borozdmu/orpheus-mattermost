@@ -219,6 +219,7 @@ func TestRegisteredBotCardCheckConfirmsOnlyHumanSourceAccounts(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatal("human cards not confirmed")
 	}
+	t.Setenv("ORPHEUS_LIVE_AUDIENCE", "false")
 	if confirmAccountCards(t.Context(), w.Access, append(roster, strings.Repeat("z", 26))) == nil || calls.Load() != 1 {
 		t.Fatal("unknown recipient reached trusted directory")
 	}
