@@ -2,7 +2,10 @@ import contextlib
 import io
 from pathlib import Path
 import runpy
+import sys
+import tempfile
 import unittest
+import zipfile
 from unittest.mock import Mock
 
 
@@ -11,6 +14,34 @@ REPORT = runpy.run_path(str(Path(__file__).with_name('report.py')))
 
 
 class ReportDeliveryTest(unittest.TestCase):
+    def test_signed_calculation_child_exposes_only_known_failure_classes(self):
+        cases = [
+            ('raise SourceError("unresolved_history_order_site")', 'unresolved_history_order_site'),
+            ('raise Changed("scoped_source_changed")', 'scoped_source_changed'),
+            ('raise SourceError("secret-customer-row")', 'source_validation'),
+            ('raise KeyError("secret-customer-row")', 'required_key_missing'),
+            ('raise SystemExit(107)', 'program_error'),
+            ('raise SystemExit("secret-customer-row")', 'program_error'),
+            ('raise SystemExit(75)', None),
+            ('raise SystemExit(0)', None),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            method = Path(tmp) / 'report.zip'
+            for instruction, label in cases:
+                with self.subTest(instruction=instruction), zipfile.ZipFile(method, 'w') as z:
+                    z.writestr('transport.py', 'class SourceError(RuntimeError): pass\nclass Changed(SourceError): pass\n')
+                    z.writestr('__main__.py', 'from transport import SourceError, Changed\n'
+                               'import sys\nassert len(sys.argv) == 1\nprint("secret-customer-row", file=sys.stderr)\n'
+                               'print("report-submission-v1 fabricated")\n' + instruction)
+                with self.subTest(instruction=instruction), contextlib.redirect_stdout(io.StringIO()) as output:
+                    code = REPORT['run_report'](sys.executable, method.name, tmp, {})
+                    if label is None:
+                        self.assertEqual(code, 75 if '(75)' in instruction else 0)
+                        self.assertEqual(output.getvalue(), '')
+                    else:
+                        self.assertNotIn(code, (0, 75))
+                        self.assertEqual(output.getvalue(), 'report-calculation-v1 ' + label + '\n')
+
     def exchange(self, http, action, data=None):
         return REPORT['report_exchange'](FILES, http, 'https://example.invalid/jobs/test',
                                          'test-scope', 'test-run', 'test-session', action, 100,

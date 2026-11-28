@@ -56,11 +56,12 @@ func (a *reportAPI) CheckSourceRead(_ context.Context, v orpheus.SourceRead, _ s
 
 type reportMM struct {
 	*acceptedFileSource
-	infos     map[string]mattermost.FileInfo
-	data      map[string][]byte
-	uploads   int
-	lostReply bool
-	delayed   *mattermost.Post
+	infos       map[string]mattermost.FileInfo
+	data        map[string][]byte
+	uploads     int
+	downloadErr error
+	lostReply   bool
+	delayed     *mattermost.Post
 }
 
 func (s *reportMM) File(_ context.Context, id string) (mattermost.FileInfo, error) {
@@ -102,6 +103,9 @@ func (s *reportMM) Create(ctx context.Context, p mattermost.CreatePost) (matterm
 	return post, nil
 }
 func (s *reportMM) Download(_ context.Context, id string, limit int64) ([]byte, error) {
+	if s.downloadErr != nil {
+		return nil, s.downloadErr
+	}
 	if b, ok := s.data[id]; ok && int64(len(b)) == limit {
 		return slices.Clone(b), nil
 	}
@@ -339,7 +343,7 @@ func TestReportOutlivesOrdinaryHTTPWriteTimeout(t *testing.T) {
 }
 
 func TestReportRestoresOnlyAuthenticatedPredecessor(t *testing.T) {
-	for _, fault := range []string{"wrong-creator", "replaced-output", "revoked-after-download"} {
+	for _, fault := range []string{"wrong-creator", "replaced-output", "revoked-after-download", "transient-download"} {
 		t.Run(fault, func(t *testing.T) {
 			f := reportExample(t)
 			s, run, token := f.stage(t)
@@ -354,7 +358,11 @@ func TestReportRestoresOnlyAuthenticatedPredecessor(t *testing.T) {
 			}
 			s, run, token = f.stage(t)
 			id := f.api.attempts[1].Envelope.Report.Prior.File
+			want := http.StatusForbidden
 			switch fault {
+			case "transient-download":
+				f.mm.downloadErr = &mattermost.HTTPError{Status: http.StatusServiceUnavailable}
+				want = http.StatusServiceUnavailable
 			case "wrong-creator":
 				meta := f.mm.infos[id]
 				meta.UserID = f.card.Actor
@@ -373,7 +381,7 @@ func TestReportRestoresOnlyAuthenticatedPredecessor(t *testing.T) {
 					return nil
 				}
 			}
-			if code, b := f.call(t, s.ID, run.ID, token, "checkpoint", "", nil); code != 403 || bytes.Equal(b, data) {
+			if code, b := f.call(t, s.ID, run.ID, token, "checkpoint", "", nil); code != want || bytes.Equal(b, data) {
 				t.Fatalf("unexpected disclosure: %d", code)
 			}
 		})
