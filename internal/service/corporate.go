@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -184,10 +183,6 @@ func (e *Engine) confirmPublicBotOutput(ctx context.Context, env conversation.En
 		return errWithholdOutput
 	}
 	return nil
-}
-
-func (e *Engine) corporateHandler() http.Handler {
-	return agentcontract.Handler(func() string { return os.Getenv("ORPHEUS_AUDIENCE_SECRET") }, e.confirmExternal)
 }
 
 // confirmExternal serves Core. A scheduled assignment is valid only while its

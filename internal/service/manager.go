@@ -80,14 +80,14 @@ func (m *Manager) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /mattermost-report/v1/jobs/{job}/{action}", m.reportHTTP)
 	mux.HandleFunc("POST /mattermost-report/v1/jobs/{job}/{action}", m.reportHTTP)
-	mux.Handle("POST /internal/audience/confirm", withDirectoryProbe(agentcontract.Handler(func() string { return os.Getenv("ORPHEUS_AUDIENCE_SECRET") }, func(ctx context.Context, a agentcontract.Assignment) error {
+	mux.Handle("POST /internal/audience/confirm", audienceConfirmationHandler(m.Logger, func(ctx context.Context, a agentcontract.Assignment) error {
 		for _, c := range m.connections {
 			if c.runtime.Engine.SourceID == a.Delivery.Source {
 				return c.runtime.Engine.confirmExternal(ctx, a)
 			}
 		}
 		return errors.New("unknown connector")
-	})))
+	}))
 	schedules, err := scheduleHandler(func(source string) *Engine {
 		for _, c := range m.connections {
 			if c.runtime.Engine.SourceID == source {

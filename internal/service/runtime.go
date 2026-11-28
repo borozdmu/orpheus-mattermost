@@ -141,7 +141,7 @@ func candidate(p mattermost.Post, ch mattermost.Channel, w config.Workflow, bot 
 }
 func (r *Runtime) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("POST /internal/audience/confirm", withDirectoryProbe(r.Engine.corporateHandler()))
+	mux.Handle("POST /internal/audience/confirm", audienceConfirmationHandler(r.Logger, r.Engine.confirmExternal))
 	schedules, err := scheduleHandler(func(source string) *Engine {
 		if r.Engine.SourceID == source {
 			return r.Engine
