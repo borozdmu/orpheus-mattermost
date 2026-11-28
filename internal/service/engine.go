@@ -66,6 +66,7 @@ type VoiceTranscriber interface {
 }
 
 type Engine struct {
+	reportMu        sync.Mutex
 	corporateMu     sync.RWMutex
 	corporateConfig *config.Config
 	Voice           VoiceTranscriber
@@ -176,6 +177,9 @@ func hookOutput(s conversation.Session, r conversation.Run, env conversation.Env
 	return attachments.Output{}, errors.New("export result unknown")
 }
 func (e *Engine) publish(ctx context.Context, p *delivery.Publisher, s conversation.Session, r conversation.Run, w config.Workflow) (result error) {
+	if env, err := contract(s, r); err == nil && env.Report != nil {
+		return nil
+	}
 	defer func() {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -571,6 +575,12 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 			}
 		}
 	}
+	if run == nil {
+		handled, err := e.continueReport(ctx, w, key, channel, snapshot, p)
+		if err != nil || handled {
+			return err
+		}
+	}
 	var latest *conversation.Session
 	if len(snapshot.Sessions) > 0 {
 		latest = &snapshot.Sessions[len(snapshot.Sessions)-1]
@@ -814,6 +824,9 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 		}
 	}
 	if run == nil {
+		if err := e.attachFirstReport(ctx, &frozen, snapshot); err != nil {
+			return err
+		}
 		if err := corporateAssignment(&frozen); err != nil {
 			return err
 		}

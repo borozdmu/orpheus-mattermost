@@ -70,3 +70,19 @@ exec(compile(source,name,"exec"))
 `, Path(), Digest())
 	return "#!/bin/sh\nset -eu\nexec python3 -I -c '" + code + "' export-output\n"
 }
+
+//go:embed report.py
+var reportSource []byte
+
+// ReportBeforeRun installs no transport credential and runs the reviewed job
+// before any model tool can mutate its workspace or output.
+func ReportBeforeRun() string {
+	var packed bytes.Buffer
+	w := zlib.NewWriter(&packed)
+	_, _ = w.Write(source)
+	_, _ = w.Write([]byte("\n"))
+	_, _ = w.Write(reportSource)
+	_ = w.Close()
+	command := fmt.Sprintf("import base64,zlib\nns={\"__name__\":\"report_hook\"}\nexec(zlib.decompress(base64.b64decode(%q)),ns)\ntry:\n ns[\"report_step\"](ns)\nexcept Exception as e:\n ns[\"report_failure\"](e)\n raise SystemExit(1)", base64.StdEncoding.EncodeToString(packed.Bytes()))
+	return "#!/bin/sh\nset -eu\nexec python3 -I -c '" + command + "'\n"
+}
