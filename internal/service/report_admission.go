@@ -172,7 +172,14 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 			// During the reconciliation window we only refresh the native receipt.
 			return false, nil
 		}
-		if (!reportHookWitness(prev, run, "retry-before-upload", "report-retry-v1") && !legacyInitialMethodRefusal(prev, run)) || prev.Report.Attempt >= 3 {
+		diagnostic := legacyCalculationFailure(prev, run)
+		if diagnostic {
+			req := reportRequest{e: e, w: w, card: card, env: prev, run: run}
+			if _, err := req.checkpointReceipt(ctx, snap, p); err != nil {
+				return true, err
+			}
+		}
+		if prev.Report.Diagnostic || prev.Report.Attempt >= 3 || (!diagnostic && !reportHookWitness(prev, run, "retry-before-upload", "report-retry-v1") && !legacyInitialMethodRefusal(prev, run)) {
 			// Only an explicit digest/position receipt can start a subsequent stage.
 			// A single technical notice remains visible if the stage stopped earlier.
 			if err := e.reportStop(ctx, w, prev, run, p); err != nil {
@@ -182,6 +189,7 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 		}
 		nextStage = *prev.Report
 		nextStage.Attempt++
+		nextStage.Diagnostic = diagnostic
 		nextStage.RetryRun = run.ID
 		notBefore := run.FinishedAt
 		if notBefore == nil || time.Now().Before(notBefore.Add(time.Minute*time.Duration(1<<(nextStage.Attempt-1)))) {
@@ -223,6 +231,21 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 	}
 	e.set(key, next)
 	return true, e.submit(ctx, key, next, nil, nil)
+}
+
+// The old hook printed this exact complete failure only after a non-zero child
+// exit and before accessing the outbox. A submitted result or a retriable exit
+// printed another line. A diagnostic replay has its own fresh identity and can
+// never grant another retry without a confirmed native checkpoint.
+func legacyCalculationFailure(env conversation.Envelope, r conversation.Run) bool {
+	s := env.Report
+	if s == nil || s.Number < 2 || s.Prior == nil || s.Attempt != 0 || s.Diagnostic || r.Status != "failed" || r.CancelRequested || r.FinishedAt == nil || len(r.Hooks) != 1 {
+		return false
+	}
+	h := r.Hooks[0]
+	return h.Name == "before_run" && h.Status == "failed" && h.Completeness == "complete" &&
+		h.StartedAt != nil && h.DeadlineAt != nil && h.FinishedAt != nil && h.FinishedAt.After(*h.StartedAt) && h.FinishedAt.Before(*h.DeadlineAt) &&
+		h.Output == "Mattermost file hook failed: stage=unknown; validation failed: report calculation did not finish this stage\n"
 }
 
 // The previous receiver treated a missing model deadline as an expired hook.

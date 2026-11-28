@@ -100,16 +100,20 @@ type Output struct {
 	Session  string `json:"session_id"`
 }
 type Stage struct {
-	Card     string  `json:"card_sha256"`
-	Job      string  `json:"job_id"`
-	Number   int     `json:"stage"`
-	Attempt  int     `json:"attempt,omitzero"`
-	RetryRun string  `json:"retry_run,omitzero"`
-	Prior    *Output `json:"previous,omitempty"`
+	Card       string  `json:"card_sha256"`
+	Job        string  `json:"job_id"`
+	Number     int     `json:"stage"`
+	Attempt    int     `json:"attempt,omitzero"`
+	Diagnostic bool    `json:"diagnostic_replay,omitzero"`
+	RetryRun   string  `json:"retry_run,omitzero"`
+	Prior      *Output `json:"previous,omitempty"`
 }
 
 func (s Stage) Valid(c Card) bool {
 	if s.Card != c.Digest() || s.Job != c.Job || s.Number < 1 || s.Attempt < 0 || s.Attempt > 3 || s.Attempt == 0 && s.RetryRun != "" || s.Attempt > 0 && !GUID(s.RetryRun) {
+		return false
+	}
+	if s.Diagnostic && (s.Number < 2 || s.Attempt != 1) {
 		return false
 	}
 	if s.Number == 1 {
@@ -136,7 +140,11 @@ func (s Stage) Invocation(anchor uuid.UUID) uuid.UUID {
 	if s.Number == 1 && s.Attempt == 0 {
 		return anchor
 	}
-	b, _ := json.Marshal([]any{"orpheus.mattermost.report-invocation.v1", s.Job, s.Number, s.Prior, s.Attempt, s.RetryRun})
+	domain := "orpheus.mattermost.report-invocation.v1"
+	if s.Diagnostic {
+		domain = "orpheus.mattermost.report-diagnostic-invocation.v1"
+	}
+	b, _ := json.Marshal([]any{domain, s.Job, s.Number, s.Prior, s.Attempt, s.RetryRun})
 	return uuid.NewSHA1(anchor, b)
 }
 

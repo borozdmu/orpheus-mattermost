@@ -34,3 +34,12 @@ Stages may retry a verified pre-upload temporary failure after 1, 2 and
 4 minutes. The receiver checks the current grant each time. Without a
 confirmed checkpoint, workbook or safe retry witness, it sends one short
 technical stop notice subject to the original audience check.
+
+For an older calculation that stopped before accessing its outbox, the receiver
+recognizes the single complete pre-upload failure line from the old hook. It
+rechecks the previous native checkpoint and opens one diagnostic session for
+the same stage and position. Another diagnostic failure stops that stage. The
+child process reports only a predefined class of failure through its exit
+status. The hook records this as `report-calculation-v1` without copying the
+program's output, error text or input values. A confirmed new checkpoint
+resumes the normal sequence.

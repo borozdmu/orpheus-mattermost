@@ -11,6 +11,72 @@ import urllib.error
 import urllib.request
 
 
+# Only a child's numeric status crosses this boundary. Its normal output,
+# exceptions, arguments and traceback are never copied into the hook journal.
+SOURCE_DIAGNOSTICS = (
+    'scoped_source_changed',
+    'unresolved_history_order_site', 'site_code_mismatch', 'wrong_shop',
+    'live_read_grant_unconfirmed', 'source_not_granted', 'changed_method_or_dictionary',
+    'wrong_previous_assignment', 'previous_file_sha_mismatch', 'previous_stage_mismatch',
+    'unproven_insertion_order_at_source_boundary', 'new_history_inside_closed_reporting_period',
+    'invalid_alignment', 'incomplete_page', 'missing_history_range',
+    'unconfirmed_custom_value', 'marker_size_rejected', 'incorrect_history_field',
+)
+REPORT_DIAGNOSTICS = SOURCE_DIAGNOSTICS + (
+    'program_error', 'source_validation', 'history_alignment_changed', 'history_count_changed',
+    'history_order_changed', 'history_cursor_changed', 'history_final_count_changed', 'history_boundary_changed',
+    'required_key_missing', 'invalid_value', 'invalid_type', 'io_error', 'memory_error',
+)
+
+REPORT_PROGRAM = """
+import hashlib, json, runpy, sys, zipfile
+
+method = sys.argv[1]
+labels, source_codes = json.loads(sys.argv[2])
+sys.argv = [method]
+try:
+    runpy.run_path(method, run_name='__main__')
+except SystemExit as e:
+    code = e.code
+    sys.exit(0 if code is None else code if type(code) is int and code in (0, 75) else 1)
+except Exception as e:
+    kind = (type(e).__module__, type(e).__name__)
+    label = 'program_error'
+    if kind in (('transport', 'SourceError'), ('transport', 'Changed')):
+        reason = e.args[0] if len(e.args) == 1 and type(e.args[0]) is str else None
+        label = reason if reason in source_codes else 'source_validation'
+        if kind == ('transport', 'Changed') and label == 'scoped_source_changed':
+            # These exact instructions distinguish order, pagination and count
+            # changes which the released program raises as one exception type.
+            tb = e.__traceback__
+            while tb.tb_next:
+                tb = tb.tb_next
+            frame = tb.tb_frame
+            if frame.f_globals.get('__name__') == 'acquire' and frame.f_code.co_name == 'acquire':
+                with zipfile.ZipFile(method) as z:
+                    source = z.read('acquire.py')
+                if hashlib.sha256(source).hexdigest() == '86c190395d6900bc548f3ee45be0b3fcf28ebc8bddccb95e1d0df9ad93956b42':
+                    label = {75:'history_alignment_changed', 95:'history_count_changed',
+                             108:'history_order_changed', 114:'history_cursor_changed',
+                             122:'history_final_count_changed', 143:'history_boundary_changed'}.get(tb.tb_lineno, label)
+    elif kind[0] == 'builtins':
+        label = {'KeyError':'required_key_missing', 'TypeError':'invalid_type',
+                 'ValueError':'invalid_value', 'OSError':'io_error', 'MemoryError':'memory_error'}.get(kind[1], label)
+    sys.exit(100 + labels.index(label))
+"""
+
+def run_report(python, method, work, child):
+    allowed = json.dumps([REPORT_DIAGNOSTICS, SOURCE_DIAGNOSTICS])
+    result = subprocess.run([python, '-I', '-c', REPORT_PROGRAM, method, allowed],
+                            cwd=work, env=child, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, timeout=540, check=False)
+    if result.returncode not in (0, 75):
+        index = result.returncode - 100
+        label = REPORT_DIAGNOSTICS[index] if 0 <= index < len(REPORT_DIAGNOSTICS) else 'program_error'
+        print('report-calculation-v1 ' + label, flush=True)
+    return result.returncode
+
+
 def report_marker(cap, run, purpose, label):
     marker = hmac.new(cap.encode(), (purpose + ':' + run).encode(), hashlib.sha256)
     print(label + ' ' + marker.hexdigest(), flush=True)
@@ -97,13 +163,12 @@ def report_step(protocol):
         store.write(method, program)
         child = {k: env[k] for k in ('HOME', 'PATH', 'LANG', 'LC_ALL', 'SSL_CERT_FILE',
                                      'HTTPS_PROXY', 'NO_PROXY') if k in env}
-        result = subprocess.run(['/opt/orpheus-native/venv/bin/python', '-I', method], cwd=work, env=child,
-                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                timeout=540, check=False)
-        if result.returncode == 75:
+        result = run_report('/opt/orpheus-native/venv/bin/python', method, work, child)
+        if result == 75:
             # No upload has started. A later admission can repeat this exact position.
             report_marker(cap, run, 'retry-before-upload', 'report-retry-v1')
-        check(result.returncode == 0, 'report calculation did not finish this stage')
+        with protocol['step']('report_calculation'):
+            check(result == 0, 'report calculation did not finish this stage')
         out = base + '/output/' + run + '/outbox/'
         candidates = list(store.walk(out.rstrip('/')))
         check(len(candidates) == 1, 'report must produce one artifact')
