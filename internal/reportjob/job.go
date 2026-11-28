@@ -148,7 +148,7 @@ func (s Stage) Valid(c Card) bool {
 	if s.Card != c.Digest() || s.Job != c.Job || s.Number < 1 || s.Attempt < 0 || s.Attempt > 3 || s.Attempt == 0 && s.RetryRun != "" || s.Attempt > 0 && !GUID(s.RetryRun) {
 		return false
 	}
-	if s.Method != nil && (!s.Method.valid(c) || s.Number < s.Method.First || s.Diagnostic) {
+	if s.Method != nil && (!s.Method.valid(c) || s.Number < s.Method.First) {
 		return false
 	}
 	if s.Diagnostic && (s.Number < 2 || s.Attempt != 1) {
@@ -176,7 +176,11 @@ func (s Stage) Token(secret, invocation, assignment string, observed time.Time) 
 
 func (s Stage) Invocation(anchor uuid.UUID) uuid.UUID {
 	if s.Method != nil {
-		b, _ := json.Marshal([]any{"orpheus.mattermost.method-invocation.v1", s.Job, s.Number, s.Method, s.Prior, s.Attempt, s.RetryRun})
+		domain := "orpheus.mattermost.method-invocation.v1"
+		if s.Diagnostic {
+			domain = "orpheus.mattermost.method-diagnostic-invocation.v1"
+		}
+		b, _ := json.Marshal([]any{domain, s.Job, s.Number, s.Method, s.Prior, s.Attempt, s.RetryRun})
 		return uuid.NewSHA1(anchor, b)
 	}
 	if s.Number == 1 && s.Attempt == 0 {

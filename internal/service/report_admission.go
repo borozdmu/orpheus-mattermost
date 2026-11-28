@@ -190,19 +190,14 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 		}
 		nextStage.Number, nextStage.Prior = prev.Report.Number, prev.Report.Prior
 	default:
-		if reportHookWitness(prev, run, "attempted-submission", "report-submission-v1") && run.FinishedAt != nil && time.Now().Before(run.FinishedAt.Add(2*time.Minute)) {
+		submitted := reportHookWitness(prev, run, "attempted-submission", "report-submission-v1")
+		if submitted && run.FinishedAt != nil && time.Now().Before(run.FinishedAt.Add(2*time.Minute)) {
 			// The remote create may have succeeded before its reply was lost.
 			// During the reconciliation window we only refresh the native receipt.
 			return false, nil
 		}
-		diagnostic := legacyCalculationFailure(prev, run)
-		if diagnostic {
-			req := reportRequest{e: e, w: w, card: card, env: prev, run: run}
-			if _, err := req.checkpointReceipt(ctx, snap, p); err != nil {
-				return true, err
-			}
-		}
-		if prev.Report.Diagnostic || prev.Report.Attempt >= 3 || (!diagnostic && !reportHookWitness(prev, run, "retry-before-upload", "report-retry-v1") && !legacyInitialMethodRefusal(prev, run)) {
+		diagnostic := legacyCalculationFailure(prev, run) || sourceCalculationFailure(prev, run)
+		if submitted || prev.Report.Diagnostic || prev.Report.Attempt >= 3 || (!diagnostic && !reportHookWitness(prev, run, "retry-before-upload", "report-retry-v1") && !legacyInitialMethodRefusal(prev, run)) {
 			// Only an explicit digest/position receipt can start a subsequent stage.
 			// A single technical notice remains visible if the stage stopped earlier.
 			if err := e.reportStop(ctx, w, prev, run, p); err != nil {
@@ -217,6 +212,12 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 		notBefore := run.FinishedAt
 		if notBefore == nil || time.Now().Before(notBefore.Add(time.Minute*time.Duration(1<<(nextStage.Attempt-1)))) {
 			return false, nil
+		}
+		if nextStage.Prior != nil {
+			req := reportRequest{e: e, w: w, card: card, env: prev, run: run}
+			if _, err := req.checkpointReceipt(ctx, snap, p); err != nil {
+				return true, err
+			}
 		}
 	}
 	if replacement != nil {
@@ -269,6 +270,23 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 // printed another line. A diagnostic replay has its own fresh identity and can
 // never grant another retry without a confirmed native checkpoint.
 func legacyCalculationFailure(env conversation.Envelope, r conversation.Run) bool {
+	if env.Report != nil && env.Report.Method != nil {
+		return false
+	}
+	return completeCalculationFailure(env, r, "Mattermost file hook failed: stage=unknown; validation failed: report calculation did not finish this stage\n")
+}
+
+// Only the previous receiver's exact, complete pre-submission failure permits
+// this diagnostic. The authorization of the replacement method, both native
+// commands and the previous checkpoint are validated during admission.
+func sourceCalculationFailure(env conversation.Envelope, r conversation.Run) bool {
+	if env.Report == nil || env.Report.Method == nil {
+		return false
+	}
+	return completeCalculationFailure(env, r, "report-calculation-v1 source_validation\nMattermost file hook failed: stage=report_calculation; validation failed: report calculation did not finish this stage\n")
+}
+
+func completeCalculationFailure(env conversation.Envelope, r conversation.Run, output string) bool {
 	s := env.Report
 	if s == nil || s.Number < 2 || s.Prior == nil || s.Attempt != 0 || s.Diagnostic || r.Status != "failed" || r.CancelRequested || r.FinishedAt == nil || len(r.Hooks) != 1 {
 		return false
@@ -276,7 +294,7 @@ func legacyCalculationFailure(env conversation.Envelope, r conversation.Run) boo
 	h := r.Hooks[0]
 	return h.Name == "before_run" && h.Status == "failed" && h.Completeness == "complete" &&
 		h.StartedAt != nil && h.DeadlineAt != nil && h.FinishedAt != nil && h.FinishedAt.After(*h.StartedAt) && h.FinishedAt.Before(*h.DeadlineAt) &&
-		h.Output == "Mattermost file hook failed: stage=unknown; validation failed: report calculation did not finish this stage\n"
+		h.Output == output
 }
 
 // The previous receiver treated a missing model deadline as an expired hook.

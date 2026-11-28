@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import io
 from pathlib import Path
 import runpy
@@ -6,7 +7,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 
 FILES = runpy.run_path(str(Path(__file__).with_name('files.py')))
@@ -14,6 +15,38 @@ REPORT = runpy.run_path(str(Path(__file__).with_name('report.py')))
 
 
 class ReportDeliveryTest(unittest.TestCase):
+    def test_reviewed_catalog_calls_only_return_fixed_operation_codes(self):
+        transport = (
+            'class SourceError(RuntimeError): pass\n'
+            'class Kord:\n'
+            '    def __init__(self, why=None):\n'
+            '        if why: raise SourceError(why)\n'
+            '    def require_live_grant(self, why): raise SourceError(why)\n'
+        )
+        cases = [
+            ("Kord('data_service_unavailable')", True, 'schema_data_service_unavailable', True),
+            ("Kord().require_live_grant('data_service_unavailable')", True, 'sources_data_service_unavailable', True),
+            ("Kord().require_live_grant('source_not_granted')", True, 'sources_source_not_granted', False),
+            ("Kord('data_access_denied')", True, 'schema_data_access_denied', False),
+            ("Kord().require_live_grant('kord_request_failed')", True, 'sources_kord_request_failed', False),
+            ("Kord().require_live_grant('secret-customer-row')", True, 'sources_unclassified', False),
+            ("Kord('data_service_unavailable')", False, 'source_validation', False),
+        ]
+        run = REPORT['run_report']
+        with tempfile.TemporaryDirectory() as tmp:
+            method = Path(tmp) / 'report.zip'
+            for statement, approved, expected, retryable in cases:
+                with self.subTest(statement=statement), zipfile.ZipFile(method, 'w') as z:
+                    z.writestr('transport.py', transport)
+                    z.writestr('__main__.py', "from transport import Kord\n" + statement)
+                digest = hashlib.sha256(transport.encode()).hexdigest() if approved else '0' * 64
+                with patch.dict(run.__globals__, REVIEWED_TRANSPORT_SHA256=digest), \
+                        contextlib.redirect_stdout(io.StringIO()) as output:
+                    status = run(sys.executable, method.name, tmp, {})
+                    self.assertNotEqual(status, 0)
+                    self.assertEqual(status == 75, retryable)
+                    self.assertEqual(output.getvalue(), 'report-calculation-v1 ' + expected + '\n')
+
     def test_signed_calculation_child_exposes_only_known_failure_classes(self):
         cases = [
             ('raise SourceError("unresolved_history_order_site")', 'unresolved_history_order_site'),
