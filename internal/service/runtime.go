@@ -407,7 +407,7 @@ func (r *Runtime) work(ctx, watchCtx context.Context, wg *sync.WaitGroup, key co
 		pending := r.Engine.inputQueue[key] > 0
 		_, frozen := r.Engine.pending[key]
 		r.Engine.mu.Unlock()
-		if !j.Retry.Permanent && !j.Dirty && !pending && !frozen && r.active[key] == 0 {
+		if !j.Retry.Permanent && !j.Dirty && !j.CapacityWait && !pending && !frozen && r.active[key] == 0 {
 			delete(r.jobs, key)
 		}
 	}
