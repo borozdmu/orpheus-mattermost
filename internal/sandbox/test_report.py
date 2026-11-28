@@ -33,3 +33,13 @@ class ReportDeliveryTest(unittest.TestCase):
         self.assertEqual(http.open.call_count, 2)
         self.assertIn('report-retry-v1', output.getvalue())
         self.assertNotIn('report-submission-v1', output.getvalue())
+
+    def test_only_known_gateway_reasons_are_reported(self):
+        from urllib.error import HTTPError
+        for remote, expected in [('window', 'window'), ('secret-untrusted-content','unidentified'), (None,'unidentified')]:
+            http = Mock()
+            headers={'X-Orpheus-Report-Reason':remote} if remote else {}
+            http.open.side_effect=HTTPError('https://example.invalid/?private-url',403,'private-message',headers,io.BytesIO(b'private-body'))
+            with contextlib.redirect_stdout(io.StringIO()) as output, self.assertRaises(FILES['HookFailure']):
+                self.exchange(http,'method')
+            self.assertEqual(output.getvalue().strip(),'report-http-v1 method '+expected+' 403')

@@ -34,7 +34,15 @@ type reportRequest struct {
 	assignment agentcontract.Assignment
 }
 
+const reportReasonHeader = "X-Orpheus-Report-Reason"
+
+var errReportStage = errors.New("report stage inactive")
+var errReportWindow = errors.New("report authorization window closed")
+var errReportOrigin = errors.New("report origin changed")
+var errReportBinding = errors.New("report admission mismatch")
+
 func (m *Manager) reportHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set(reportReasonHeader, "request")
 	w.Header().Set("Cache-Control", "no-store")
 	card, err := loadReportCard()
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -73,7 +81,7 @@ func (m *Manager) reportHTTP(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		req, err := e.activeReport(ctx, *route, card, sid, rid, token)
 		if err != nil {
-			reportFailure(w, err)
+			reportFailure(w, err, "admission")
 			return
 		}
 		req.serve(ctx, w, r)
@@ -103,9 +111,8 @@ func (e *Engine) activeReport(ctx context.Context, w config.Workflow, card repor
 			if err != nil || env.Report == nil || !env.Report.Valid(card) || !reportInputBound(w, env, card) || env.AccessContext.Assignment == nil {
 				break
 			}
-			a, err := agentcontract.Decode(*env.AccessContext.Assignment)
-			if err != nil || a.Author.ID != card.Actor || a.Confirmation.Digest != a.Digest() || a.InvocationID != env.AccessContext.InvocationID || a.Delivery.Message != env.Anchor || a.Delivery.Chat != card.Channel || a.Delivery.Thread != card.Thread || a.Delivery.Source != e.SourceID ||
-				a.Verify(os.Getenv("ORPHEUS_AUDIENCE_SECRET"), a.Confirmation.ObservedAt) != nil || !hmac.Equal([]byte(token), []byte(env.Report.Token(os.Getenv("ORPHEUS_AUDIENCE_SECRET"), a.InvocationID.String(), a.Confirmation.Digest, env.AccessContext.ContextObservedAt))) {
+			a, err := reportAssignment(env, card, e.SourceID)
+			if err != nil || !hmac.Equal([]byte(token), []byte(env.Report.Token(os.Getenv("ORPHEUS_AUDIENCE_SECRET"), a.InvocationID.String(), a.Confirmation.Digest, env.AccessContext.ContextObservedAt))) {
 				break
 			}
 			reply := reportRequest{e: e, w: w, card: card, env: env, run: r, assignment: a}
@@ -115,7 +122,7 @@ func (e *Engine) activeReport(ctx context.Context, w config.Workflow, card repor
 			return &reply, nil
 		}
 	}
-	return nil, errors.New("report stage admission mismatch")
+	return nil, errReportBinding
 }
 
 func (x *reportRequest) originCurrent(ctx context.Context) error {
@@ -123,17 +130,40 @@ func (x *reportRequest) originCurrent(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if r.ID != x.run.ID || r.SessionID != x.run.SessionID || r.Terminal() || r.CancelRequested || r.Phase != "before_run" || r.DeadlineAt == nil || !r.DeadlineAt.After(time.Now()) {
-		return errors.New("report stage inactive")
+	if r.ID != x.run.ID || r.SessionID != x.run.SessionID || r.Terminal() || r.CancelRequested || r.Phase != "before_run" {
+		return errReportStage
+	}
+	now := time.Now()
+	if !reportHookActive(r, now) || x.assignment.Verify(os.Getenv("ORPHEUS_AUDIENCE_SECRET"), now) != nil {
+		return errReportWindow
 	}
 	post, err := x.e.MM.Post(ctx, x.env.Anchor)
 	if err != nil {
 		return err
 	}
 	if post.ID != x.env.Anchor || post.UserID != x.card.Actor || post.Root() != x.card.Thread || post.ChannelID != x.card.Channel || post.DeleteAt != 0 || !slices.Contains(x.env.Versions, conversation.PostVersion(post)) || !reportjob.MatchesCommand(post.Message, x.e.Bot.Username, x.card) {
-		return errors.New("report origin changed")
+		return errReportOrigin
 	}
 	return nil
+}
+
+// Core starts the hook before it starts the model's execution deadline.
+func reportHookActive(run conversation.Run, now time.Time) bool {
+	if run.DeadlineAt != nil && !run.DeadlineAt.After(now) {
+		return false
+	}
+	found := false
+	for _, h := range run.Hooks {
+		if h.Name != "before_run" {
+			continue
+		}
+		if found || h.Status != "running" || h.StartedAt == nil || h.StartedAt.After(now) ||
+			h.DeadlineAt == nil || !h.DeadlineAt.After(now) || h.FinishedAt != nil {
+			return false
+		}
+		found = true
+	}
+	return found
 }
 
 func (x *reportRequest) current(ctx context.Context) error {
@@ -193,7 +223,7 @@ func (x *reportRequest) serve(ctx context.Context, w http.ResponseWriter, r *htt
 		err = x.originCurrent(ctx)
 	}
 	if err != nil {
-		reportFailure(w, err)
+		reportFailure(w, err, r.PathValue("action"))
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -368,7 +398,21 @@ func (x *reportRequest) finish(ctx context.Context, name string, data []byte, sh
 	return nil
 }
 
-func reportFailure(w http.ResponseWriter, err error) {
+func reportFailure(w http.ResponseWriter, err error, action string) {
+	reason := "request"
+	switch {
+	case errors.Is(err, errReportStage):
+		reason = "stage"
+	case errors.Is(err, errReportWindow):
+		reason = "window"
+	case errors.Is(err, errReportOrigin):
+		reason = "origin"
+	case errors.Is(err, errReportBinding):
+		reason = "binding"
+	case action == "admission" || action == "method" || action == "checkpoint" || action == "result":
+		reason = action
+	}
+	w.Header().Set(reportReasonHeader, reason)
 	temporary := errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 	if _, ok := errors.AsType[net.Error](err); ok {
 		temporary = true

@@ -165,7 +165,8 @@ func (f reportTest) stage(t *testing.T) (conversation.Session, conversation.Run,
 	r := &s.Runs[0]
 	s.ExternalKey = f.key.External()
 	r.Phase = "before_run"
-	r.DeadlineAt = new(time.Now().Add(20 * time.Minute))
+	r.DeadlineAt = nil
+	r.Hooks = []conversation.Hook{{Name: "before_run", Status: "running", StartedAt: new(time.Now().Add(-time.Second)), DeadlineAt: new(time.Now().Add(899 * time.Second))}}
 	env, _ := contract(*s, *r)
 	a, err := agentcontract.Decode(*env.AccessContext.Assignment)
 	if err != nil {
@@ -452,5 +453,133 @@ func TestReportReconcilesLateNativeReceiptWithoutCreatingAgain(t *testing.T) {
 	}
 	if f.mm.calls != 1 || f.mm.uploads != 1 || len(f.api.attempts) != 1 {
 		t.Fatal("late published workbook resubmitted")
+	}
+}
+
+func TestReportHookRealDeadline(t *testing.T) {
+	now := time.Now()
+	h := conversation.Hook{Name: "before_run", Status: "running", StartedAt: new(now.Add(-time.Second)), DeadlineAt: new(now.Add(899 * time.Second))}
+	r := conversation.Run{ID: uuid.NewString(), SessionID: uuid.NewString(), Status: "running", Phase: "before_run", Hooks: []conversation.Hook{h}}
+	if !reportHookActive(r, now) {
+		t.Fatal("Core before_run has a separate live hook deadline and a null model deadline")
+	}
+	for _, test := range []string{"missing-hook", "duplicate", "expired-model", "expired-hook", "missing-deadline", "future-start", "finished", "not-running"} {
+		t.Run(test, func(t *testing.T) {
+			bad := r
+			bad.Hooks = slices.Clone(r.Hooks)
+			switch test {
+			case "missing-hook":
+				bad.Hooks = nil
+			case "duplicate":
+				bad.Hooks = append(bad.Hooks, h)
+			case "expired-model":
+				bad.DeadlineAt = new(now)
+			case "expired-hook":
+				bad.Hooks[0].DeadlineAt = new(now)
+			case "missing-deadline":
+				bad.Hooks[0].DeadlineAt = nil
+			case "future-start":
+				bad.Hooks[0].StartedAt = new(now.Add(time.Second))
+			case "finished":
+				bad.Hooks[0].FinishedAt = new(now)
+			case "not-running":
+				bad.Hooks[0].Status = "pending"
+			}
+			if reportHookActive(bad, now) {
+				t.Fatal("expired/inactive execution accepted")
+			}
+		})
+	}
+}
+
+func TestReportMethodReasonIsBounded(t *testing.T) {
+	f := reportExample(t)
+	s, run, token := f.stage(t)
+	q := httptest.NewRequest("GET", reportjob.BasePath+f.card.Job+"/method", nil)
+	q.Header.Set("Authorization", "Bearer "+token)
+	q.Header.Set("X-Orpheus-Run", run.ID)
+	q.Header.Set("X-Orpheus-Session", s.ID)
+	f.api.snapshot.Sessions[0].Runs[0].Hooks[0].DeadlineAt = nil
+	w := httptest.NewRecorder()
+	f.handler.ServeHTTP(w, q)
+	if w.Code != 403 || w.Header().Get(reportReasonHeader) != "window" {
+		t.Fatal(w.Code, w.Header().Get(reportReasonHeader))
+	}
+}
+
+func TestReportPriorMethodFailureGetsOneFreshAdmission(t *testing.T) {
+	for _, kind := range []string{"initial", "late-failure", "edited", "foreign", "signed-method-denial", "incomplete", "missing-proof", "wrong-seal"} {
+		t.Run(kind, func(t *testing.T) {
+			f := reportExample(t)
+			_, first, _ := f.stage(t)
+			r := &f.api.snapshot.Sessions[0].Runs[0]
+			r.Status = "failed"
+			r.FinishedAt = new(time.Now().Add(-2 * time.Minute))
+			h := &r.Hooks[0]
+			h.StartedAt = new(r.FinishedAt.Add(-time.Second))
+			h.DeadlineAt = new(h.StartedAt.Add(900 * time.Second))
+			h.FinishedAt = r.FinishedAt
+			h.Status = "failed"
+			h.Completeness = "complete"
+			h.Output = "Mattermost file hook failed: stage=report_exchange; HTTPError: HTTP 403"
+			switch kind {
+			case "missing-proof", "wrong-seal":
+				m := &f.api.snapshot.Sessions[0].Messages[0]
+				env, err := conversation.Decode(m.Metadata)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if kind == "missing-proof" {
+					env.AccessProof = nil
+				} else {
+					assignment, err := agentcontract.Decode(*env.AccessContext.Assignment)
+					if err != nil {
+						t.Fatal(err)
+					}
+					assignment.Confirmation.Receipt = strings.Repeat("0", 64)
+					raw, err := json.Marshal(assignment)
+					if err != nil {
+						t.Fatal(err)
+					}
+					*env.AccessContext.Assignment = raw
+				}
+				raw, err := json.Marshal(env)
+				if err != nil {
+					t.Fatal(err)
+				}
+				m.Metadata = raw
+			case "late-failure":
+				h.Output = "Mattermost file hook failed: stage=report_submission; HTTPError: HTTP 403"
+			case "edited":
+				f.mm.posts[0].Message += " edited"
+			case "foreign":
+				f.mm.audience = append(f.mm.audience, strings.Repeat("f", 26))
+			case "signed-method-denial":
+				h.Output = "report-http-v1 method window 403\nMattermost file hook failed: stage=report_method; HTTPError: HTTP 403"
+			case "incomplete":
+				h.Completeness = "truncated"
+			}
+			err := f.e.Thread(t.Context(), f.w, f.key, f.mm.channel, true)
+			if kind != "initial" {
+				if len(f.api.attempts) != 1 {
+					t.Fatal("false recovery", err)
+				}
+				return
+			}
+			if err != nil || len(f.api.attempts) != 2 {
+				t.Fatal("no fresh admission", err)
+			}
+			next := f.api.attempts[1].Envelope
+			if next.Report.Attempt != 1 || next.Report.Number != 1 || next.Predecessor != first.ID || next.Anchor != f.api.attempts[0].Envelope.Anchor || next.AccessContext.InvocationID == f.api.attempts[0].Envelope.AccessContext.InvocationID || next.AccessContext.Assignment == nil {
+				t.Fatal("reused authorization")
+			}
+			_, retry, _ := f.stage(t)
+			retry.DeadlineAt = nil
+			retry.Status = "failed"
+			retry.Hooks = []conversation.Hook{*h}
+			if legacyInitialMethodRefusal(next, retry) {
+				t.Fatal("legacy failure reused")
+			}
+		})
 	}
 }

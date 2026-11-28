@@ -85,6 +85,23 @@ func reportInputBound(w config.Workflow, env conversation.Envelope, card reportj
 	return f.PostID == env.Anchor && f.ChannelID == env.Channel && f.Origin == "thread" && f.Status == "" && f.Size > 0 && f.Size <= 1<<20
 }
 
+// Verify the recorded assignment at issue time for provenance. Current
+// authority is evaluated separately for every admission and file exchange.
+func reportAssignment(env conversation.Envelope, card reportjob.Card, sourceID string) (agentcontract.Assignment, error) {
+	var empty agentcontract.Assignment
+	ctx := env.AccessContext
+	if ctx == nil || ctx.Assignment == nil || env.AccessProof == nil {
+		return empty, errReportBinding
+	}
+	a, err := agentcontract.Decode(*ctx.Assignment)
+	if err != nil || a.Author.ID != card.Actor || a.Author.ID != ctx.Subject.ID || a.Author.Namespace != ctx.Subject.Namespace || a.Confirmation.Revision != env.Revision ||
+		!a.Confirmation.ObservedAt.Equal(ctx.ContextObservedAt) || a.InvocationID != ctx.InvocationID || a.Delivery.Connector != "mattermost" || a.Delivery.Message != env.Anchor ||
+		a.Delivery.Chat != card.Channel || a.Delivery.Thread != card.Thread || a.Delivery.Source != sourceID || a.Verify(os.Getenv("ORPHEUS_AUDIENCE_SECRET"), a.Confirmation.ObservedAt) != nil {
+		return empty, errReportBinding
+	}
+	return a, nil
+}
+
 func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conversation.Key, channel mattermost.Channel, snap conversation.Snapshot, p *delivery.Publisher) (bool, error) {
 	history := false
 	for _, s := range snap.Sessions {
@@ -111,6 +128,7 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 	if card.Workflow != key.Workflow || card.Channel != key.Channel || card.Thread != key.Root {
 		return false, nil
 	}
+	var previousSession *conversation.Session
 	var prev conversation.Envelope
 	var run conversation.Run
 	for _, s := range snap.Sessions {
@@ -123,12 +141,19 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 				return true, errors.New("conflicting report history")
 			}
 			if prev.Report == nil || prev.Report.Number < env.Report.Number || prev.Report.Number == env.Report.Number && prev.Report.Attempt < env.Report.Attempt {
-				prev, run = env, r
+				previousSession, prev, run = &s, env, r
 			}
 		}
 	}
 	if prev.Report == nil || !run.Terminal() || run.CancelRequested || run.Status == "cancelled" {
 		return false, nil
+	}
+	old, err := protectedContract(previousSession, &run, w, key)
+	if err != nil || previousSession.ExternalKey != key.External() || run.SessionID != previousSession.ID || !reportInputBound(w, old, card) {
+		return true, errReportBinding
+	}
+	if _, err = reportAssignment(old, card, e.SourceID); err != nil {
+		return true, err
 	}
 	receipt, artifact, err := e.reportReceipt(ctx, p, prev, run)
 	if err != nil {
@@ -147,7 +172,7 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 			// During the reconciliation window we only refresh the native receipt.
 			return false, nil
 		}
-		if !reportHookWitness(prev, run, "retry-before-upload", "report-retry-v1") || prev.Report.Attempt >= 3 {
+		if (!reportHookWitness(prev, run, "retry-before-upload", "report-retry-v1") && !legacyInitialMethodRefusal(prev, run)) || prev.Report.Attempt >= 3 {
 			// Only an explicit digest/position receipt can start a subsequent stage.
 			// A single technical notice remains visible if the stage stopped earlier.
 			if err := e.reportStop(ctx, w, prev, run, p); err != nil {
@@ -198,6 +223,21 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 	}
 	e.set(key, next)
 	return true, e.submit(ctx, key, next, nil, nil)
+}
+
+// The previous receiver treated a missing model deadline as an expired hook.
+// Its first stage had exactly one report_exchange GET (method) and a separate
+// report_submission POST. Recognize only its complete pre-calculation failure,
+// once, then run the usual fresh native admission from the original command.
+func legacyInitialMethodRefusal(env conversation.Envelope, r conversation.Run) bool {
+	s := env.Report
+	if s == nil || s.Number != 1 || s.Attempt != 0 || s.Prior != nil || r.Status != "failed" || r.CancelRequested || r.DeadlineAt != nil || len(r.Hooks) != 1 {
+		return false
+	}
+	h := r.Hooks[0]
+	return h.Name == "before_run" && h.Status == "failed" && h.Completeness == "complete" &&
+		h.StartedAt != nil && h.DeadlineAt != nil && h.FinishedAt != nil && !h.FinishedAt.Before(*h.StartedAt) && h.FinishedAt.Before(*h.DeadlineAt) &&
+		strings.TrimSpace(h.Output) == "Mattermost file hook failed: stage=report_exchange; HTTPError: HTTP 403"
 }
 
 func reportHookWitness(env conversation.Envelope, r conversation.Run, purpose, label string) bool {
