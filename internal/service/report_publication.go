@@ -1,0 +1,76 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/orpheus-agents/orpheus-mattermost/internal/conversation"
+	"github.com/orpheus-agents/orpheus-mattermost/internal/reportjob"
+	"github.com/orpheus-agents/orpheus/agentcontract"
+)
+
+var openPublication = reportjob.OpenPublication
+
+func reportStorage(card reportjob.Card, existing string) (string, error) {
+	j, err := openPublication(card)
+	if err != nil {
+		return "", err
+	}
+	if err = j.File.Close(); err != nil {
+		return "", err
+	}
+	storage := j.Approval.Registration()
+	if existing != "" && existing != storage {
+		return "", errReportBinding
+	}
+	return storage, nil
+}
+
+func (x *reportRequest) recordPublication(ctx context.Context, action, digest string) error {
+	journal, err := openPublication(x.card)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = journal.File.Close() }()
+	if x.env.Report.Storage == "" || x.env.Report.Storage != journal.Approval.Registration() {
+		return errReportBinding
+	}
+	if x.env.Report.Recovery != "" && x.env.Report.Recovery != journal.Approval.Digest() {
+		return errReportBinding
+	}
+	return journal.Record(ctx, reportjob.PublicationEvent{Stage: x.env.Report.Number, Run: x.run.ID, Invocation: x.assignment.InvocationID.String(), Action: action, Digest: digest})
+}
+
+// Only a separately reviewed historical absence can cover a stage that
+// predates this ledger. A missing terminal output is never that evidence.
+func historicalRecovery(env conversation.Envelope, run conversation.Run, a agentcontract.Assignment, approval reportjob.RecoveryApproval, card reportjob.Card, now time.Time) bool {
+	s := env.Report
+	if s == nil || !s.Diagnostic || s.Attempt != 1 || s.Recovery != "" || s.Storage != "" || s.Prior == nil || s.Method == nil ||
+		run.Status != "failed" || run.CancelRequested || run.Error != "service_credentials_expired" || run.FinishedAt == nil || len(run.Hooks) != 1 {
+		return false
+	}
+	h := run.Hooks[0]
+	if h.Name != "before_run" || h.Status != "failed" || h.Completeness != "unavailable" || h.Output != "" || h.StartedAt == nil || h.FinishedAt == nil || h.DeadlineAt == nil ||
+		!h.FinishedAt.After(*h.StartedAt) || !h.FinishedAt.Before(*h.DeadlineAt) {
+		return false
+	}
+	return approval.Valid(card) && !now.Before(approval.Approved) && now.Before(approval.Expires) &&
+		approval.Run == run.ID && approval.Session == run.SessionID && approval.Invocation == a.InvocationID.String() &&
+		approval.Assignment == a.Confirmation.Digest && approval.Stage == s.Number && approval.Original == s.Method.Original && approval.Upgrade == s.Method.Post &&
+		approval.Method == s.Method.To && approval.Checkpoint == s.Prior.SHA && approval.CheckpointPost == s.Prior.Post && approval.Position == s.Prior.Position &&
+		!approval.RestoreFirst.Before(*h.StartedAt) && !approval.CRM.After(*h.FinishedAt) && !approval.Revoked.Before(*run.FinishedAt)
+}
+
+func claimRecovery(ctx context.Context, card reportjob.Card, stage reportjob.Stage, invocation string) error {
+	journal, err := openPublication(card)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = journal.File.Close() }()
+	a := journal.Approval
+	if a.Digest() != stage.Recovery || time.Now().Before(a.Approved) || !time.Now().Before(a.Expires) || stage.RetryRun != a.Run {
+		return errors.New("recovery approval changed")
+	}
+	return journal.Record(ctx, reportjob.PublicationEvent{Stage: stage.Number, Run: a.Run, Invocation: invocation, Action: "claim", Digest: a.Digest()})
+}

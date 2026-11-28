@@ -187,6 +187,10 @@ func (x *reportRequest) permit(ctx context.Context, sha, purpose string) error {
 func (x *reportRequest) serve(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var data []byte
 	var err error
+	if err = x.recordPublication(ctx, "open", x.assignment.Confirmation.Digest); err != nil {
+		reportFailure(w, err, "binding")
+		return
+	}
 	switch {
 	case r.Method == "GET" && r.PathValue("action") == "method":
 		method := x.card.Method
@@ -358,9 +362,15 @@ func (x *reportRequest) finish(ctx context.Context, name string, data []byte, sh
 	}
 	if old != nil {
 		if old.SHA == sha && a.Name == name && a.Size == int64(len(data)) && old.Position == position {
-			return nil
+			return x.recordPublication(ctx, "receipt", sha)
 		}
 		return delivery.ErrConflict
+	}
+	if err = x.recordPublication(ctx, "result", sha); err != nil {
+		return err
+	}
+	if err = x.recordPublication(ctx, "upload", sha); err != nil {
+		return err
 	}
 	if err = x.permit(ctx, sha, "upload"); err != nil {
 		return err
@@ -391,7 +401,12 @@ func (x *reportRequest) finish(ctx context.Context, name string, data []byte, sh
 	part.Receipt.ReportJob = x.card.Job
 	part.Receipt.ReportStage = x.env.Report.Number
 	part.Receipt.ReportPosition = position
-	p.BeforeCreate = func(ctx context.Context) error { return x.permit(ctx, sha, "publish") }
+	p.BeforeCreate = func(ctx context.Context) error {
+		if err := x.recordPublication(ctx, "publish", sha); err != nil {
+			return err
+		}
+		return x.permit(ctx, sha, "publish")
+	}
 	if err = p.PublishOnce(ctx, part); err != nil {
 		return err
 	}
@@ -405,7 +420,7 @@ func (x *reportRequest) finish(ctx context.Context, name string, data []byte, sh
 	if old == nil || old.SHA != sha {
 		return errors.New("native report receipt unavailable")
 	}
-	return nil
+	return x.recordPublication(ctx, "receipt", sha)
 }
 
 func reportFailure(w http.ResponseWriter, err error, action string) {

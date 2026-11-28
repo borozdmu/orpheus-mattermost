@@ -77,3 +77,43 @@ a safe retry of that stage, receives `method_transition` with the old and new
 SHA-256. Subsequent stages use the new program normally. All restored bytes
 come from the verified bot receipt. The receiver checks the original command
 and approval reply again before material is released or the result is posted.
+
+## Recording external file delivery
+
+Before enabling staged reports, mount the publication journal as a writable
+file at `MM_REPORT_PUBLICATION_JOURNAL`. Mount its operator registration
+read-only at `MM_REPORT_RECOVERY_APPROVAL`. Ordinary conversations need
+neither file. The receiver never creates or replaces a missing journal.
+
+The registration schema is `orpheus.mattermost.report-journal.v1`. Its
+remaining fields are `job_id`, `card_sha256`, `journal_id` (a fresh UUID),
+`device` and `inode`. The operator creates a regular file owned by root
+and the receiver's group, mode 0660, with one hard link. Write the following
+single line with its terminating newline, then set the Linux append-only
+file flag before starting the receiver.
+
+```text
+orpheus.mattermost.publication.v1 <journal_id> <job_id> <card_sha256>
+```
+
+The signed stage identifies that registration. The receiver records the
+opening of the stage and each attempt to deliver a result. It holds a file
+lock while checking prior records and synchronizing each new record to disk.
+Fresh source and audience checks precede the external upload and post. A
+lost reply leaves the attempt recorded across restarts. Only an exact native
+delivery receipt can confirm the post. Incomplete records, changed
+registration and unconfirmed sends stop further publication. The journal
+contains identifiers and digests; the checkpoint stays in the original
+thread.
+
+For one audited interruption predating the journal, a root-owned
+`orpheus.mattermost.report-recovery.v1` registration may additionally
+certify the terminal run, its assignment, both author commands, checkpoint,
+receiver version, audit interval and revocations. The two completed restore
+decisions and the first CRM operation must precede revocation, with no
+subsequent permission to upload or post. The operator verifies the complete
+durable audit before issuing this time-limited certificate. The receiver
+rechecks the commands, audience and native checkpoint, then records a
+single recovery claim before requesting a fresh assignment. If the process
+stops after the claim, check Core for that assignment. The receiver does
+not resubmit an unconfirmed claim.

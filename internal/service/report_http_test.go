@@ -142,6 +142,7 @@ func reportExample(t *testing.T) reportTest {
 	key.Source = w.Mattermost.Source(src.bot)
 	e.SourceID = key.Source
 	card := reportjob.Card{Schema: "orpheus.mattermost.report-card.v1", Job: uuid.NewString(), Workflow: w.ID, Channel: key.Channel, Thread: key.Root, Actor: src.posts[0].UserID, Method: attachments.Hash([]byte("png")), Source: "my", Revision: "dummy-v1", URL: "https://beta-kord.skillum.ai" + reportjob.BasePath}
+	installTestPublication(t, card)
 	old := loadReportCard
 	loadReportCard = func() (reportjob.Card, error) { return card, nil }
 	t.Cleanup(func() { loadReportCard = old })
