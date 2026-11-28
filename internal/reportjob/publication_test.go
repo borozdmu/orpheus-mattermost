@@ -162,3 +162,73 @@ func TestPublicationClaimAndLockDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPublicationHandoffSerializesAgainstEarlierResult(t *testing.T) {
+	for _, order := range []string{"handoff-first", "result-first", "concurrent"} {
+		t.Run(order, func(t *testing.T) {
+			path, approval := journalFixture(t)
+			record := func(v PublicationEvent) error {
+				j := testJournal(t, path, approval)
+				return j.Record(t.Context(), v)
+			}
+			old := PublicationEvent{Stage: 10, Run: uuid.NewString(), Invocation: uuid.NewString(), Action: "claim", Digest: strings.Repeat("a", 64)}
+			if err := record(old); err != nil {
+				t.Fatal(err)
+			}
+			old.Run, old.Action, old.Digest = uuid.NewString(), "open", strings.Repeat("b", 64)
+			transfer := old
+			transfer.Invocation, transfer.Action = uuid.NewString(), "handoff"
+			if record(transfer) == nil {
+				t.Fatal("missing previous opening allowed")
+			}
+			if err := record(old); err != nil {
+				t.Fatal(err)
+			}
+			wrong := transfer
+			wrong.Digest = strings.Repeat("9", 64)
+			if record(wrong) == nil {
+				t.Fatal("incorrect previous assignment allowed")
+			}
+			result := old
+			result.Action, result.Digest = "result", strings.Repeat("c", 64)
+			var handed, sent error
+			switch order {
+			case "handoff-first":
+				handed, sent = record(transfer), record(result)
+			case "result-first":
+				sent, handed = record(result), record(transfer)
+			default:
+				var wg sync.WaitGroup
+				wg.Go(func() { handed = record(transfer) })
+				wg.Go(func() { sent = record(result) })
+				wg.Wait()
+			}
+			if (handed == nil) == (sent == nil) {
+				t.Fatal("expected exactly one writer", handed, sent)
+			}
+			if handed != nil {
+				if record(transfer) == nil {
+					t.Fatal("completed transfer after a prior result")
+				}
+				return
+			}
+			if record(old) == nil || record(result) == nil || record(transfer) == nil {
+				t.Fatal("stale writer or repeated handoff")
+			}
+			fresh := transfer
+			fresh.Run, fresh.Action, fresh.Digest = uuid.NewString(), "open", strings.Repeat("d", 64)
+			if err := record(fresh); err != nil {
+				t.Fatal(err)
+			}
+			again := fresh
+			again.Action, again.Invocation = "handoff", uuid.NewString()
+			if record(again) == nil {
+				t.Fatal("second transfer allowed")
+			}
+			fresh.Action, fresh.Digest = "result", result.Digest
+			if err := record(fresh); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

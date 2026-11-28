@@ -138,10 +138,11 @@ type PublicationEvent struct {
 }
 
 type publicationState struct {
-	opens  map[string]string
-	result PublicationEvent
-	last   string
-	claim  string
+	opens     map[string]string
+	result    PublicationEvent
+	last      string
+	claim     string
+	handedOff bool
 }
 
 func (s *publicationState) apply(v PublicationEvent) (bool, error) {
@@ -155,6 +156,13 @@ func (s *publicationState) apply(v PublicationEvent) (bool, error) {
 			return false, conflict
 		}
 		s.claim = v.Invocation
+	case "handoff":
+		if s.claim == "" || s.handedOff || s.claim == v.Invocation || s.last != "" ||
+			s.opens[v.Run] != s.claim+" "+v.Digest {
+			return false, conflict
+		}
+		s.claim = v.Invocation
+		s.handedOff = true
 	case "open":
 		if s.claim != "" && s.claim != v.Invocation {
 			return false, conflict
@@ -171,7 +179,7 @@ func (s *publicationState) apply(v PublicationEvent) (bool, error) {
 		}
 		s.opens[v.Run] = key
 	case "result":
-		if !strings.HasPrefix(s.opens[v.Run], v.Invocation+" ") || s.last != "" {
+		if s.claim != "" && s.claim != v.Invocation || !strings.HasPrefix(s.opens[v.Run], v.Invocation+" ") || s.last != "" {
 			return false, conflict
 		}
 		s.result = v

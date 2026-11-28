@@ -187,6 +187,7 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 		return true, err
 	}
 	nextStage := reportjob.Stage{Card: card.Digest(), Job: card.Job, Method: prev.Report.Method}
+	var handoff bool
 	switch {
 	case receipt != nil:
 		nextStage.Number = prev.Report.Number + 1
@@ -224,7 +225,11 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 			}
 		}
 		ordinaryRetry := !prev.Report.Diagnostic && prev.Report.Attempt < 3 && (diagnostic || reportHookWitness(prev, run, "retry-before-upload", "report-retry-v1") || legacyInitialMethodRefusal(prev, run))
-		if submitted || prev.Report.Recovery != "" || recovery == "" && !ordinaryRetry {
+		if prev.Report.Recovery != "" {
+			handoff = ordinaryRetry && recoveredCalculationRetry(prev, run)
+			ordinaryRetry = handoff
+		}
+		if submitted || recovery == "" && !ordinaryRetry {
 			// Only an explicit digest/position receipt can start a subsequent stage.
 			// A single technical notice remains visible if the stage stopped earlier.
 			if err := e.reportStop(ctx, w, prev, run, p); err != nil {
@@ -306,11 +311,17 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 			return true, err
 		}
 	}
-	if nextStage.Recovery != "" {
+	if nextStage.Recovery != "" || handoff {
 		if _, err = e.reportCommand(ctx, card, next.Envelope); err != nil {
 			return true, err
 		}
-		if err = claimRecovery(ctx, card, nextStage, next.Envelope.AccessContext.InvocationID.String()); err != nil {
+		invocation := next.Envelope.AccessContext.InvocationID.String()
+		if handoff {
+			err = handoffRecovery(ctx, card, prev, run, previousAssignment, invocation)
+		} else {
+			err = claimRecovery(ctx, card, nextStage, invocation)
+		}
+		if err != nil {
 			return true, err
 		}
 	}
