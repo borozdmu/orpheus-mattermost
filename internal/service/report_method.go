@@ -117,7 +117,7 @@ func (e *Engine) reportCommand(ctx context.Context, card reportjob.Card, env con
 
 func (e *Engine) requestedMethod(card reportjob.Card, prev conversation.Envelope, original mattermost.Post, posts []mattermost.Post) (*reportjob.MethodRevision, error) {
 	prior := prev.Report.Method
-	if prior != nil && (prior.Previous != nil || prev.Report.Attempt != 3 || prev.Report.Diagnostic || prev.Report.Storage == "" || prev.Report.Prior == nil) {
+	if prior != nil && (prior.Previous != nil || prev.Report.Attempt != 0 || prev.Report.Diagnostic || prev.Report.Storage == "" || prev.Report.Prior == nil) {
 		return nil, nil
 	}
 	var selected *reportjob.MethodRevision

@@ -111,8 +111,11 @@ func signedPreUploadStop(env conversation.Envelope, run conversation.Run) bool {
 
 func secondMethodBoundary(env conversation.Envelope, run conversation.Run) bool {
 	s := env.Report
-	return s != nil && s.Attempt == 3 && !s.Diagnostic && s.Storage != "" && s.Recovery == "" &&
-		s.Method != nil && s.Method.Previous == nil && s.Prior != nil && signedPreUploadStop(env, run)
+	if s == nil || s.Storage == "" || s.Recovery != "" || s.Method == nil || s.Method.Previous != nil ||
+		s.Number <= s.Method.First || !completeCalculationFailure(env, run, "report-calculation-v1 marker_size_rejected\nMattermost file hook failed: stage=report_calculation; validation failed: report calculation did not finish this stage\n") {
+		return false
+	}
+	return !run.Hooks[0].FinishedAt.After(*run.FinishedAt)
 }
 
 func retireForSecondMethod(ctx context.Context, card reportjob.Card, prev conversation.Envelope, run conversation.Run, assignment agentcontract.Assignment, invocation string) error {
@@ -121,14 +124,13 @@ func retireForSecondMethod(ctx context.Context, card reportjob.Card, prev conver
 		return err
 	}
 	defer func() { _ = journal.File.Close() }()
-	a, s := journal.Approval, prev.Report
-	if !a.Valid(card) || a.Registration() != s.Storage || a.Stage != s.Number || a.Method != s.Method.To ||
-		a.Original != s.Method.Original || a.Upgrade != s.Method.Post || a.CheckpointPost != s.Prior.Post ||
-		a.Checkpoint != s.Prior.SHA || a.Position != s.Prior.Position {
+	s := prev.Report
+	if journal.Approval.Registration() != s.Storage || s.Prior == nil {
 		return errReportBinding
 	}
 	return journal.Record(ctx, reportjob.PublicationEvent{Stage: s.Number, Run: run.ID, Invocation: invocation,
-		Action: "method-change", Digest: assignment.Confirmation.Digest})
+		Action: "method-change", Digest: assignment.Confirmation.Digest, Former: assignment.InvocationID.String(),
+		PriorRun: s.Prior.Run, PriorSHA: s.Prior.SHA})
 }
 
 func handoffRecovery(ctx context.Context, card reportjob.Card, prev conversation.Envelope, run conversation.Run, assignment agentcontract.Assignment, invocation string) error {

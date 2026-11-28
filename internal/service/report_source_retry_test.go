@@ -23,15 +23,25 @@ const completeSourceValidation = "report-calculation-v1 source_validation\nMatte
 
 func reportSourceFailure(t *testing.T) (reportTest, []byte) {
 	t.Helper()
+	return reportSourceFailureAt(t, 2)
+}
+
+func reportSourceFailureAt(t *testing.T, methodStage int) (reportTest, []byte) {
+	t.Helper()
 	f, approval := prepareMethodTest(t)
-	publishMethodResult(t, f, reportjob.CheckpointName, methodCheckpoint(t, f, 1, 11))
+	for i := 1; i < methodStage; i++ {
+		publishMethodResult(t, f, reportjob.CheckpointName, methodCheckpoint(t, f, i, i+10))
+		if i < methodStage-1 {
+			methodThread(t, f)
+		}
+	}
 	addMethodPost(f, approval)
 	methodThread(t, f)
-	checkpoint := methodCheckpoint(t, f, 2, 23)
+	checkpoint := methodCheckpoint(t, f, methodStage, 23)
 	publishMethodResult(t, f, reportjob.CheckpointName, checkpoint)
 	methodThread(t, f)
 	f.stage(t)
-	run := &f.api.snapshot.Sessions[2].Runs[0]
+	run := &f.api.snapshot.Sessions[len(f.api.snapshot.Sessions)-1].Runs[0]
 	failCalculationFixture(run)
 	run.Hooks[0].Output = completeSourceValidation
 	return f, checkpoint

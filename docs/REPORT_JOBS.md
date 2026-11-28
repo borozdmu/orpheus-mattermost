@@ -127,10 +127,11 @@ same file lock used for a result. A delayed request from the former run
 can no longer publish. A missing opening, an uncertain submission or an
 unknown hook outcome stops the job. Each stage has at most three retries.
 
-### Change the method after the remaining retry
+### Change the method after a page-size failure at a confirmed checkpoint
 
-After the last retry of an audited recovery, a second method can take over
-from the same native checkpoint. The first approval stays mounted. A separate
+If an ordinary stage stopped before publication with the exact trusted
+`marker_size_rejected` outcome on its first attempt, a second method can take
+over from the preceding native checkpoint. The first approval stays mounted. A separate
 root-owned read-only file at `MM_REPORT_SECOND_METHOD_APPROVAL` uses schema
 `orpheus.mattermost.method-approval.v2`. Its fields bind the original job and
 card, the first approval digest, both program digests, the new filename, and
@@ -142,10 +143,11 @@ approved program to a new post in the original thread with this command:
 ```
 
 The receiver verifies all three native posts, the original recipients and
-current source access. It checks the previous native checkpoint and requires
-a complete signed stop before output. The protected journal must still
-contain the historical claim, its opening, its single handoff and the final
-retry's opening. An exclusive lock serializes the method change with any
+current source access. It checks the previous native checkpoint and the
+complete output and deadline of the bound hook. The protected journal must
+contain the preceding successful receipt and one opening of the stopped
+stage by its original invocation, with no result intent. The receiver
+checks both stages under the same lock. The lock serializes the method change with any
 earlier writer. The new invocation may publish one result for that stage.
 If Core did not acknowledge the new invocation, check its actual state
 before any further action. A confirmed checkpoint starts the next ordinary

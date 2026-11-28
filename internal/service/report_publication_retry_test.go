@@ -26,7 +26,12 @@ func (s completedUploadWithLostResponse) Upload(ctx context.Context, channel, na
 
 func historicalPublicationFixture(t *testing.T) (reportTest, []byte, *reportjob.RecoveryApproval) {
 	t.Helper()
-	f, checkpoint := reportSourceFailure(t)
+	return historicalPublicationAt(t, 2)
+}
+
+func historicalPublicationAt(t *testing.T, methodStage int) (reportTest, []byte, *reportjob.RecoveryApproval) {
+	t.Helper()
+	f, checkpoint := reportSourceFailureAt(t, methodStage)
 	methodThread(t, f)
 	f.stage(t)
 	last := &f.api.snapshot.Sessions[len(f.api.snapshot.Sessions)-1]

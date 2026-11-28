@@ -12,7 +12,6 @@ func TestPublicationSecondMethodFencesAllEarlierWriters(t *testing.T) {
 	for _, order := range []string{"replacement-first", "result-first", "concurrent"} {
 		t.Run(order, func(t *testing.T) {
 			path, approval := journalFixture(t)
-			approval.Run, approval.Stage = uuid.NewString(), 10
 			record := func(v PublicationEvent) error {
 				j := testJournal(t, path, approval)
 				return j.Record(t.Context(), v)
@@ -29,25 +28,33 @@ func TestPublicationSecondMethodFencesAllEarlierWriters(t *testing.T) {
 					t.Fatal("unexpected admission", v.Action)
 				}
 			}
-			one := PublicationEvent{Stage: approval.Stage, Run: approval.Run, Invocation: uuid.NewString(), Action: "claim", Digest: approval.Digest()}
+			one := PublicationEvent{Stage: 10, Run: uuid.NewString(), Invocation: uuid.NewString(), Action: "open", Digest: strings.Repeat("a", 64)}
 			require(one)
-			one.Action, one.Run, one.Digest = "open", uuid.NewString(), strings.Repeat("1", 64)
-			require(one)
-			two := one
-			two.Action, two.Invocation = "handoff", uuid.NewString()
-			require(two)
-			transfer := two
-			transfer.Action, transfer.Invocation = "method-change", uuid.NewString()
+			one.Digest = strings.Repeat("1", 64)
+			for _, action := range []string{"result", "upload", "publish"} {
+				one.Action = action
+				require(one)
+			}
+			two := PublicationEvent{Stage: 11, Run: uuid.NewString(), Invocation: uuid.NewString(), Action: "open", Digest: strings.Repeat("2", 64)}
+			transfer := PublicationEvent{Stage: 11, Run: two.Run, Invocation: uuid.NewString(), Action: "method-change", Digest: two.Digest,
+				Former: two.Invocation, PriorRun: one.Run, PriorSHA: one.Digest}
 			denied(transfer)
-			two.Action, two.Run, two.Digest = "open", uuid.NewString(), strings.Repeat("2", 64)
 			require(two)
-			transfer.Run, transfer.Digest = two.Run, two.Digest
+			denied(transfer)
+			one.Action = "receipt"
+			require(one)
 			bad := transfer
-			bad.Invocation = one.Invocation
+			bad.Invocation = transfer.Former
 			denied(bad)
-			approval.Audit = strings.Repeat("f", 64)
-			denied(transfer)
-			approval.Audit = ""
+			bad = transfer
+			bad.PriorSHA = strings.Repeat("9", 64)
+			denied(bad)
+			bad = transfer
+			bad.PriorRun = uuid.NewString()
+			denied(bad)
+			bad = transfer
+			bad.Former = uuid.NewString()
+			denied(bad)
 			late := two
 			late.Action, late.Digest = "result", strings.Repeat("b", 64)
 			var changed, published error
@@ -69,14 +76,12 @@ func TestPublicationSecondMethodFencesAllEarlierWriters(t *testing.T) {
 			if changed != nil {
 				return
 			}
-			denied(one)
 			denied(two)
 			denied(late)
-			newMethod := transfer
-			newMethod.Run, newMethod.Action, newMethod.Digest = uuid.NewString(), "open", strings.Repeat("3", 64)
+			newMethod := PublicationEvent{Stage: 11, Run: uuid.NewString(), Invocation: transfer.Invocation, Action: "open", Digest: strings.Repeat("3", 64)}
 			require(newMethod)
-			another := newMethod
-			another.Invocation, another.Action = uuid.NewString(), "method-change"
+			another := transfer
+			another.Invocation, another.Former, another.Run, another.Digest = uuid.NewString(), newMethod.Invocation, newMethod.Run, newMethod.Digest
 			denied(another)
 			newMethod.Action, newMethod.Digest = "result", strings.Repeat("4", 64)
 			require(newMethod)

@@ -201,7 +201,7 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 		nextStage.Prior = receipt
 	case replacement != nil:
 		// A failed old stage can only resume from an already published earlier file.
-		if prev.Report.Prior == nil || !provenBeforeSubmission(prev, run) {
+		if prev.Report.Prior == nil || !secondChange && !provenBeforeSubmission(prev, run) {
 			return true, errors.New("report method change has no safe checkpoint boundary")
 		}
 		req := reportRequest{e: e, w: w, card: card, env: prev, run: run}
