@@ -24,22 +24,27 @@ class ReportDeliveryTest(unittest.TestCase):
             '    def require_live_grant(self, why): raise SourceError(why)\n'
         )
         cases = [
-            ("Kord('data_service_unavailable')", True, 'schema_data_service_unavailable'),
-            ("Kord().require_live_grant('source_not_granted')", True, 'sources_source_not_granted'),
-            ("Kord().require_live_grant('secret-customer-row')", True, 'sources_unclassified'),
-            ("Kord('secret-customer-row')", False, 'source_validation'),
+            ("Kord('data_service_unavailable')", True, 'schema_data_service_unavailable', True),
+            ("Kord().require_live_grant('data_service_unavailable')", True, 'sources_data_service_unavailable', True),
+            ("Kord().require_live_grant('source_not_granted')", True, 'sources_source_not_granted', False),
+            ("Kord('data_access_denied')", True, 'schema_data_access_denied', False),
+            ("Kord().require_live_grant('kord_request_failed')", True, 'sources_kord_request_failed', False),
+            ("Kord().require_live_grant('secret-customer-row')", True, 'sources_unclassified', False),
+            ("Kord('data_service_unavailable')", False, 'source_validation', False),
         ]
         run = REPORT['run_report']
         with tempfile.TemporaryDirectory() as tmp:
             method = Path(tmp) / 'report.zip'
-            for statement, approved, expected in cases:
+            for statement, approved, expected, retryable in cases:
                 with self.subTest(statement=statement), zipfile.ZipFile(method, 'w') as z:
                     z.writestr('transport.py', transport)
                     z.writestr('__main__.py', "from transport import Kord\n" + statement)
                 digest = hashlib.sha256(transport.encode()).hexdigest() if approved else '0' * 64
                 with patch.dict(run.__globals__, REVIEWED_TRANSPORT_SHA256=digest), \
                         contextlib.redirect_stdout(io.StringIO()) as output:
-                    self.assertNotIn(run(sys.executable, method.name, tmp, {}), (0, 75))
+                    status = run(sys.executable, method.name, tmp, {})
+                    self.assertNotEqual(status, 0)
+                    self.assertEqual(status == 75, retryable)
                     self.assertEqual(output.getvalue(), 'report-calculation-v1 ' + expected + '\n')
 
     def test_signed_calculation_child_exposes_only_known_failure_classes(self):

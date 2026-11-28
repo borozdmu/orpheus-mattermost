@@ -97,6 +97,9 @@ def run_report(python, method, work, child):
         index = result.returncode - 100
         label = REPORT_DIAGNOSTICS[index] if 0 <= index < len(REPORT_DIAGNOSTICS) else 'program_error'
         print('report-calculation-v1 ' + label, flush=True)
+        if label in ('schema_data_service_unavailable', 'sources_data_service_unavailable'):
+            # report_step signs the bounded retry before it opens the outbox.
+            return 75
     return result.returncode
 
 

@@ -190,19 +190,14 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 		}
 		nextStage.Number, nextStage.Prior = prev.Report.Number, prev.Report.Prior
 	default:
-		if reportHookWitness(prev, run, "attempted-submission", "report-submission-v1") && run.FinishedAt != nil && time.Now().Before(run.FinishedAt.Add(2*time.Minute)) {
+		submitted := reportHookWitness(prev, run, "attempted-submission", "report-submission-v1")
+		if submitted && run.FinishedAt != nil && time.Now().Before(run.FinishedAt.Add(2*time.Minute)) {
 			// The remote create may have succeeded before its reply was lost.
 			// During the reconciliation window we only refresh the native receipt.
 			return false, nil
 		}
 		diagnostic := legacyCalculationFailure(prev, run) || sourceCalculationFailure(prev, run)
-		if diagnostic {
-			req := reportRequest{e: e, w: w, card: card, env: prev, run: run}
-			if _, err := req.checkpointReceipt(ctx, snap, p); err != nil {
-				return true, err
-			}
-		}
-		if prev.Report.Diagnostic || prev.Report.Attempt >= 3 || (!diagnostic && !reportHookWitness(prev, run, "retry-before-upload", "report-retry-v1") && !legacyInitialMethodRefusal(prev, run)) {
+		if submitted || prev.Report.Diagnostic || prev.Report.Attempt >= 3 || (!diagnostic && !reportHookWitness(prev, run, "retry-before-upload", "report-retry-v1") && !legacyInitialMethodRefusal(prev, run)) {
 			// Only an explicit digest/position receipt can start a subsequent stage.
 			// A single technical notice remains visible if the stage stopped earlier.
 			if err := e.reportStop(ctx, w, prev, run, p); err != nil {
@@ -217,6 +212,12 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 		notBefore := run.FinishedAt
 		if notBefore == nil || time.Now().Before(notBefore.Add(time.Minute*time.Duration(1<<(nextStage.Attempt-1)))) {
 			return false, nil
+		}
+		if nextStage.Prior != nil {
+			req := reportRequest{e: e, w: w, card: card, env: prev, run: run}
+			if _, err := req.checkpointReceipt(ctx, snap, p); err != nil {
+				return true, err
+			}
 		}
 	}
 	if replacement != nil {

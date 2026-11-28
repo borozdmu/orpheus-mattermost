@@ -50,6 +50,10 @@ receive one diagnostic attempt from the same confirmed checkpoint. Both
 author commands, the source, the audience and the file are checked again.
 The reviewed client's package lookup and source listing have separate,
 fixed diagnostic codes. A further failure on that checkpoint stops the stage.
+On ordinary stages, a confirmed `data_service_unavailable` during either
+operation uses the same signed pre-submission retry and its existing limit
+of three attempts. Access denials and unknown source errors stop the stage.
+A signed submission attempt always takes precedence over a retry marker.
 
 
 ## Approving a replacement program

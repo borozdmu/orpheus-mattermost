@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/orpheus-agents/orpheus-mattermost/internal/conversation"
 	"github.com/orpheus-agents/orpheus-mattermost/internal/mattermost"
@@ -201,6 +202,92 @@ func TestReportSourceRetryObeysCurrentReadDenialAndNativeReceipt(t *testing.T) {
 				if next.Number != 4 || next.Diagnostic || next.Attempt != 0 || next.Prior.Position != 30 {
 					t.Fatal("retried a stage with a genuine newer checkpoint")
 				}
+			}
+		})
+	}
+}
+
+func reportSourceMarker(token, run, purpose, label string) string {
+	mac := hmac.New(sha256.New, []byte(token))
+	_, _ = mac.Write([]byte(purpose + ":" + run))
+	return fmt.Sprintf("%s %x\n", label, mac.Sum(nil))
+}
+
+func TestReportSourceUnavailableUsesOnlyBoundedSignedRetries(t *testing.T) {
+	for _, code := range []string{"schema_data_service_unavailable", "sources_data_service_unavailable"} {
+		t.Run(code, func(t *testing.T) {
+			f, checkpoint := reportSourceFailure(t)
+			prior := *f.api.attempts[2].Envelope.Report.Prior
+			for attempt := range 4 {
+				sid, run, token := f.stage(t)
+				old := f.api.attempts[len(f.api.attempts)-1].Envelope
+				target := &f.api.snapshot.Sessions[len(f.api.snapshot.Sessions)-1].Runs[0]
+				failCalculationFixture(target)
+				target.FinishedAt = new(time.Now().Add(-6 * time.Minute))
+				target.Hooks[0].FinishedAt = target.FinishedAt
+				target.Hooks[0].StartedAt = new(target.FinishedAt.Add(-time.Minute))
+				target.Hooks[0].DeadlineAt = new(target.FinishedAt.Add(time.Minute))
+				target.Hooks[0].Output = "report-calculation-v1 " + code + "\n" +
+					reportSourceMarker(token, run.ID, "retry-before-upload", "report-retry-v1") +
+					"Mattermost file hook failed: stage=report_calculation; validation failed: report calculation did not finish this stage\n"
+				methodThread(t, f)
+				if attempt == 3 {
+					if len(f.api.attempts) != 6 {
+						t.Fatal("fourth retry admitted")
+					}
+					break
+				}
+				if len(f.api.attempts) != 4+attempt {
+					t.Fatal("ordinary retry missing", attempt+1)
+				}
+				next := f.api.attempts[3+attempt].Envelope
+				if next.Report.Diagnostic || next.Report.Number != 3 || next.Report.Attempt != attempt+1 || next.Report.RetryRun != run.ID ||
+					next.Predecessor != run.ID || next.Report.Prior == nil || *next.Report.Prior != prior ||
+					next.AccessContext.InvocationID == old.AccessContext.InvocationID || next.Report.Method == nil || *next.Report.Method != *old.Report.Method {
+					t.Fatal("ordinary retry did not preserve method, checkpoint and fresh admission")
+				}
+				s, r, cap := f.stage(t)
+				if s.ID == sid.ID || r.ID == run.ID || cap == token {
+					t.Fatal("retry reused a session or capability")
+				}
+				if status, data := f.call(t, s.ID, r.ID, cap, "checkpoint", "", nil); status != http.StatusOK || !bytes.Equal(data, checkpoint) {
+					t.Fatal("ordinary retry cannot restore its exact checkpoint", status)
+				}
+			}
+		})
+	}
+}
+
+func TestReportSourceUnavailableRejectsUnprovenRetry(t *testing.T) {
+	for _, issue := range []string{"unsigned", "wrong-signature", "explicit-denial", "unknown", "attempted-and-retry", "deleted-checkpoint"} {
+		t.Run(issue, func(t *testing.T) {
+			f, _ := reportSourceFailure(t)
+			_, run, token := f.stage(t)
+			target := &f.api.snapshot.Sessions[2].Runs[0]
+			failCalculationFixture(target) // Three minutes ago; the normal waiting period has elapsed.
+			label := "schema_data_service_unavailable"
+			retry := reportSourceMarker(token, run.ID, "retry-before-upload", "report-retry-v1")
+			switch issue {
+			case "unsigned":
+				retry = ""
+			case "wrong-signature":
+				retry = reportSourceMarker("other-stage", run.ID, "retry-before-upload", "report-retry-v1")
+			case "explicit-denial":
+				label, retry = "sources_data_access_denied", ""
+			case "unknown":
+				label, retry = "program_error", ""
+			case "attempted-and-retry":
+				retry += reportSourceMarker(token, run.ID, "attempted-submission", "report-submission-v1")
+			case "deleted-checkpoint":
+				id := f.api.attempts[2].Envelope.Report.Prior.Post
+				index := slices.IndexFunc(f.mm.posts, func(p mattermost.Post) bool { return p.ID == id })
+				f.mm.posts[index].DeleteAt = f.mm.posts[index].CreateAt + 1
+			}
+			target.Hooks[0].Output = "report-calculation-v1 " + label + "\n" + retry +
+				"Mattermost file hook failed: stage=report_calculation; validation failed: report calculation did not finish this stage\n"
+			_ = f.e.Thread(t.Context(), f.w, f.key, f.mm.channel, true)
+			if len(f.api.attempts) != 3 || f.mm.uploads != 2 {
+				t.Fatal("retried or published without a verified unsubmitted source read")
 			}
 		})
 	}
