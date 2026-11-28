@@ -21,6 +21,11 @@ func corporateReaders(w config.Workflow, roster []string) ([]agentcontract.Princ
 	if w.Access == nil {
 		return nil, errors.New("corporate audience missing")
 	}
+	resolved, err := resolveLiveHumans(context.Background(), *w.Access, roster)
+	if err != nil {
+		return nil, err
+	}
+	w.Access = &resolved
 	if err := w.Access.Validate(); err != nil {
 		return nil, err
 	}

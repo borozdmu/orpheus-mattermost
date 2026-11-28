@@ -121,3 +121,15 @@ agent's capacity limit. Its terminal state must be confirmed first.
 Приёмник ничего не публикует в Mattermost. Он читает текущий канал и его участников, сверяет набор читателей с `ReadersDigest`, выдаёт задание с маршрутом `space-schedule:<schedule>` / `space-occurrence:<occurrence>` и сразу подтверждает его сам. Подтверждение Core для такого задания действует, пока файл регистрации тот же и не прошло пять минут от начала периода. Без каталога возможность выключена.
 
 Для такого задания номер связи в событиях `kord.route.v1` вычисляется из номера запуска: `uuid5(occurrence_id, "audience/confirm")` без дефисов. Наблюдатель на сервере так связывает выдачу задания, подтверждение Core и решение Provider с тем же запуском Space. Явный заголовок `X-Kord-Route-Probe` имеет приоритет; обычные сообщения номер не получают.
+
+### Joining and leaving a protected channel
+
+The receiver reads current channel membership for each protected operation.
+For a human missing from the initial mapping, it asks the account directory
+to resolve every observed human and verify their existing agent access.
+The directory credential for `<agent>-mattermost-audience` must allow both
+`external.confirm_audience` and `external.resolve_audience_accounts`. Assigned
+audience clients continue to use their registered agent and assignment policy.
+A missing or ambiguous identity stops the operation. The next observation
+excludes former members. Set `ORPHEUS_LIVE_AUDIENCE=false` to restore fixed
+identity mappings during rollback.

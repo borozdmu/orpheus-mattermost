@@ -23,6 +23,11 @@ type botOwnership struct {
 // projectAccess keeps source identities in the core's input authority and maps
 // service identities only into the configured opaque provider fields.
 func projectAccess(binding config.Access, audience []string, actor string) (api.AccessScopeContext, []api.AccessSubject, error) {
+	var err error
+	binding, err = resolveLiveHumans(context.Background(), binding, audience)
+	if err != nil {
+		return nil, nil, err
+	}
 	if err := binding.Validate(); err != nil {
 		return nil, nil, err
 	}
