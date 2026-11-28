@@ -117,3 +117,12 @@ rechecks the commands, audience and native checkpoint, then records a
 single recovery claim before requesting a fresh assignment. If the process
 stops after the claim, check Core for that assignment. The receiver does
 not resubmit an unconfirmed claim.
+
+If the recovered program returns its signed temporary failure before
+inspecting the outbox, the receiver can use the remaining ordinary retry.
+The journal must contain the exact previous opening and no result intent.
+The receiver rechecks the two commands, readers and native checkpoint,
+then records the transfer of publication to a fresh invocation under the
+same file lock used for a result. A delayed request from the former run
+can no longer publish. A missing opening, an uncertain submission or an
+unknown hook outcome stops the job. Each stage has at most three retries.

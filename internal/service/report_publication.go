@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/orpheus-agents/orpheus-mattermost/internal/conversation"
@@ -73,4 +74,44 @@ func claimRecovery(ctx context.Context, card reportjob.Card, stage reportjob.Sta
 		return errors.New("recovery approval changed")
 	}
 	return journal.Record(ctx, reportjob.PublicationEvent{Stage: stage.Number, Run: a.Run, Invocation: invocation, Action: "claim", Digest: a.Digest()})
+}
+
+// The signed program returned 75 and the complete trusted hook stopped before
+// inspecting its outbox. Submission or any other output is not this witness.
+func recoveredCalculationRetry(env conversation.Envelope, run conversation.Run) bool {
+	s := env.Report
+	if s == nil || s.Recovery == "" || s.Storage == "" || s.Attempt != 2 || s.Diagnostic || s.Prior == nil ||
+		run.FinishedAt == nil || len(run.Hooks) != 1 {
+		return false
+	}
+	h := run.Hooks[0]
+	if h.StartedAt == nil || h.DeadlineAt == nil || h.FinishedAt == nil || !h.FinishedAt.After(*h.StartedAt) ||
+		!h.FinishedAt.Before(*h.DeadlineAt) || h.FinishedAt.After(*run.FinishedAt) {
+		return false
+	}
+	output := h.Output
+	for _, prefix := range []string{"report-calculation-v1 schema_data_service_unavailable\n", "report-calculation-v1 sources_data_service_unavailable\n"} {
+		if rest, ok := strings.CutPrefix(output, prefix); ok {
+			output = rest
+			break
+		}
+	}
+	witness, rest, ok := strings.Cut(output, "\n")
+	return ok && rest == "Mattermost file hook failed: stage=report_calculation; validation failed: report calculation did not finish this stage\n" &&
+		strings.HasPrefix(witness, "report-retry-v1 ") && reportHookWitness(env, run, "retry-before-upload", "report-retry-v1")
+}
+
+func handoffRecovery(ctx context.Context, card reportjob.Card, prev conversation.Envelope, run conversation.Run, assignment agentcontract.Assignment, invocation string) error {
+	journal, err := openPublication(card)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = journal.File.Close() }()
+	if prev.Report.Storage != journal.Approval.Registration() || prev.Report.Recovery != journal.Approval.Digest() {
+		return errReportBinding
+	}
+	// The positive old opening and absence of an external result must still
+	// hold under the very lock that removes the former writer's authority.
+	return journal.Record(ctx, reportjob.PublicationEvent{Stage: prev.Report.Number, Run: run.ID, Invocation: invocation,
+		Action: "handoff", Digest: assignment.Confirmation.Digest})
 }
