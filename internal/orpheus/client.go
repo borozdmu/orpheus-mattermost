@@ -364,6 +364,14 @@ func (c *Client) Submit(ctx context.Context, w config.Workflow, e conversation.E
 			w.AgentID == "" || !slices.Contains(w.Services, "kord") || slices.Contains(w.EnvFrom, w.Mattermost.TokenEnv) {
 			return conversation.Accepted{}, errors.New("invalid native report submission")
 		}
+		method := card.Method
+		if stage.Method != nil {
+			approval, err := reportjob.LoadMethodApproval(card)
+			if err != nil || !stage.Method.Approved(approval, card) || stage.Method.Post != e.Anchor || len(e.Request.Files) != 1 || stage.Method.File != e.Request.Files[0].FileID || approval.FileName != e.Request.Files[0].Name {
+				return conversation.Accepted{}, errors.New("report method replacement unconfirmed")
+			}
+			method = stage.Method.To
+		}
 		a, err := agentcontract.Decode(*access.Assignment)
 		if err != nil {
 			return conversation.Accepted{}, err
@@ -374,7 +382,7 @@ func (c *Client) Submit(ctx context.Context, w config.Workflow, e conversation.E
 		}
 		stageJSON, _ := json.Marshal(stage.Manifest())
 		env = map[string]string{"MM_INPUT_MANIFEST": env["MM_INPUT_MANIFEST"], "MM_REPORT_STAGE": string(stageJSON),
-			"MM_REPORT_URL": card.URL + stage.Job, "MM_REPORT_CAPABILITY": token, "MM_REPORT_METHOD_SHA256": card.Method}
+			"MM_REPORT_URL": card.URL + stage.Job, "MM_REPORT_CAPABILITY": token, "MM_REPORT_METHOD_SHA256": method}
 		envFrom = []string{}
 	}
 	var request any

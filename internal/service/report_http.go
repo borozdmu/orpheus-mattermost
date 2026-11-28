@@ -137,14 +137,8 @@ func (x *reportRequest) originCurrent(ctx context.Context) error {
 	if !reportHookActive(r, now) || x.assignment.Verify(os.Getenv("ORPHEUS_AUDIENCE_SECRET"), now) != nil {
 		return errReportWindow
 	}
-	post, err := x.e.MM.Post(ctx, x.env.Anchor)
-	if err != nil {
-		return err
-	}
-	if post.ID != x.env.Anchor || post.UserID != x.card.Actor || post.Root() != x.card.Thread || post.ChannelID != x.card.Channel || post.DeleteAt != 0 || !slices.Contains(x.env.Versions, conversation.PostVersion(post)) || !reportjob.MatchesCommand(post.Message, x.e.Bot.Username, x.card) {
-		return errReportOrigin
-	}
-	return nil
+	_, err = x.e.reportCommand(ctx, x.card, x.env)
+	return err
 }
 
 // Core starts the hook before it starts the model's execution deadline.
@@ -195,7 +189,11 @@ func (x *reportRequest) serve(ctx context.Context, w http.ResponseWriter, r *htt
 	var err error
 	switch {
 	case r.Method == "GET" && r.PathValue("action") == "method":
-		data, err = x.e.readBoundFile(ctx, x.w, x.env, x.env.Request.Files[0], x.card.Method)
+		method := x.card.Method
+		if x.env.Report.Method != nil {
+			method = x.env.Report.Method.To
+		}
+		data, err = x.e.readBoundFile(ctx, x.w, x.env, x.env.Request.Files[0], method)
 	case r.Method == "GET" && r.PathValue("action") == "checkpoint":
 		data, err = x.restore(ctx)
 	case r.Method == "POST" && r.PathValue("action") == "result":
@@ -280,7 +278,7 @@ func (x *reportRequest) checkpointReceipt(ctx context.Context, snap conversation
 				continue
 			}
 			source, err := protectedContract(&s, &r, x.w, x.env.Key())
-			if err != nil || source.Report == nil || source.Report.Number+1 != x.env.Report.Number || !source.Report.Valid(x.card) || source.Anchor != x.env.Anchor || source.AccessContext.Subject != x.env.AccessContext.Subject || source.AccessProof.ProjectionDigest != x.env.AccessProof.ProjectionDigest || !slices.Equal(source.AccessProof.AudienceSubjects, x.env.AccessProof.AudienceSubjects) {
+			if err != nil || source.Report == nil || source.Report.Number+1 != x.env.Report.Number || !source.Report.Valid(x.card) || !sameReportLineage(source, x.env) || source.AccessContext.Subject != x.env.AccessContext.Subject || source.AccessProof.ProjectionDigest != x.env.AccessProof.ProjectionDigest || !slices.Equal(source.AccessProof.AudienceSubjects, x.env.AccessProof.AudienceSubjects) {
 				continue
 			}
 			if _, err := reportAssignment(source, x.card, x.e.SourceID); err != nil {
