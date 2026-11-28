@@ -596,7 +596,9 @@ func (e *Engine) reconcile(ctx context.Context, w config.Workflow, key conversat
 		initial = false
 	}
 	rejected := p.Rejected(w.EffectiveRevision)
-	posts := slices.DeleteFunc(slices.Clone(p.Posts), func(post mattermost.Post) bool { return rejected[post.ID] })
+	posts := slices.DeleteFunc(slices.Clone(p.Posts), func(post mattermost.Post) bool {
+		return rejected[post.ID] || reservedMethodCommand(post.Message, e.Bot.Username)
+	})
 	posts, err = e.modelCommands(ctx, w, channel, p, posts)
 	if err != nil || len(posts) == 0 {
 		return err
@@ -904,6 +906,15 @@ func (e *Engine) submit(ctx context.Context, key conversation.Key, p pending, cu
 			if errors.Is(err, agentbox.ErrRunEnded) {
 				return nil
 			}
+			return err
+		}
+	}
+	if stage := p.Envelope.Report; stage != nil && stage.Method != nil {
+		card, err := loadReportCard()
+		if err != nil {
+			return err
+		}
+		if _, err := e.reportCommand(ctx, card, p.Envelope); err != nil {
 			return err
 		}
 	}

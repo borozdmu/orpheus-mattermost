@@ -22,6 +22,7 @@ import (
 )
 
 var loadReportCard = reportjob.Load
+var loadMethodApproval = reportjob.LoadMethodApproval
 
 // attachFirstReport is effective only for a genuine, configured post. Historical
 // chat text, operator input or a posted receipt alone cannot start a job.
@@ -131,16 +132,19 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 	var previousSession *conversation.Session
 	var prev conversation.Envelope
 	var run conversation.Run
+	seen := make(map[[3]int]bool)
 	for _, s := range snap.Sessions {
 		for _, r := range s.Runs {
 			env, x := contract(s, r)
 			if x != nil || env.Report == nil || env.Report.Job != card.Job {
 				continue
 			}
-			if !env.Report.Valid(card) || prev.Report != nil && env.Report.Number == prev.Report.Number && env.Report.Attempt == prev.Report.Attempt {
+			rank := reportRank(env.Report)
+			if !env.Report.Valid(card) || seen[rank] {
 				return true, errors.New("conflicting report history")
 			}
-			if prev.Report == nil || prev.Report.Number < env.Report.Number || prev.Report.Number == env.Report.Number && prev.Report.Attempt < env.Report.Attempt {
+			seen[rank] = true
+			if prev.Report == nil || laterReport(rank, reportRank(prev.Report)) {
 				previousSession, prev, run = &s, env, r
 			}
 		}
@@ -159,20 +163,46 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 	if err != nil {
 		return true, err
 	}
-	nextStage := reportjob.Stage{Card: card.Digest(), Job: card.Job}
-	if receipt != nil {
-		if artifact.Name != reportjob.CheckpointName {
-			return false, nil
-		}
+	if receipt != nil && artifact.Name != reportjob.CheckpointName {
+		return false, nil
+	}
+	post, err := e.reportCommand(ctx, card, prev)
+	if err != nil {
+		return true, err
+	}
+	replacement, err := e.requestedMethod(card, prev, post, p.Posts)
+	if err != nil {
+		return true, err
+	}
+	nextStage := reportjob.Stage{Card: card.Digest(), Job: card.Job, Method: prev.Report.Method}
+	switch {
+	case receipt != nil:
 		nextStage.Number = prev.Report.Number + 1
 		nextStage.Prior = receipt
-	} else {
+	case replacement != nil:
+		// A failed old stage can only resume from an already published earlier file.
+		if prev.Report.Prior == nil || !provenBeforeSubmission(prev, run) {
+			return true, errors.New("report method change has no safe checkpoint boundary")
+		}
+		req := reportRequest{e: e, w: w, card: card, env: prev, run: run}
+		if _, err := req.checkpointReceipt(ctx, snap, p); err != nil {
+			return true, err
+		}
+		nextStage.Number, nextStage.Prior = prev.Report.Number, prev.Report.Prior
+	default:
 		if reportHookWitness(prev, run, "attempted-submission", "report-submission-v1") && run.FinishedAt != nil && time.Now().Before(run.FinishedAt.Add(2*time.Minute)) {
 			// The remote create may have succeeded before its reply was lost.
 			// During the reconciliation window we only refresh the native receipt.
 			return false, nil
 		}
-		if (!reportHookWitness(prev, run, "retry-before-upload", "report-retry-v1") && !legacyInitialMethodRefusal(prev, run)) || prev.Report.Attempt >= 3 {
+		diagnostic := legacyCalculationFailure(prev, run)
+		if diagnostic {
+			req := reportRequest{e: e, w: w, card: card, env: prev, run: run}
+			if _, err := req.checkpointReceipt(ctx, snap, p); err != nil {
+				return true, err
+			}
+		}
+		if prev.Report.Diagnostic || prev.Report.Attempt >= 3 || (!diagnostic && !reportHookWitness(prev, run, "retry-before-upload", "report-retry-v1") && !legacyInitialMethodRefusal(prev, run)) {
 			// Only an explicit digest/position receipt can start a subsequent stage.
 			// A single technical notice remains visible if the stage stopped earlier.
 			if err := e.reportStop(ctx, w, prev, run, p); err != nil {
@@ -182,26 +212,25 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 		}
 		nextStage = *prev.Report
 		nextStage.Attempt++
+		nextStage.Diagnostic = diagnostic
 		nextStage.RetryRun = run.ID
 		notBefore := run.FinishedAt
 		if notBefore == nil || time.Now().Before(notBefore.Add(time.Minute*time.Duration(1<<(nextStage.Attempt-1)))) {
 			return false, nil
 		}
 	}
-	pos := slices.IndexFunc(p.Posts, func(post mattermost.Post) bool { return post.ID == prev.Anchor })
-	if pos < 0 {
-		return true, errors.New("original report post no longer present")
-	}
-	post := p.Posts[pos]
-	if post.UserID != card.Actor || post.DeleteAt != 0 || !slices.Contains(prev.Versions, conversation.PostVersion(post)) || !reportjob.MatchesCommand(post.Message, e.Bot.Username, card) {
-		return true, errors.New("original report command changed")
+	if replacement != nil {
+		replacement.First = nextStage.Number
+		nextStage.Method = replacement
+		index := slices.IndexFunc(p.Posts, func(v mattermost.Post) bool { return v.ID == replacement.Post })
+		post = p.Posts[index]
 	}
 	builder := conversation.Builder{Source: e.MM, Config: e.Config, Workflow: w, Bot: e.Bot, TriggerOnly: true}
 	env, msgs, err := builder.BuildMessages(ctx, key, channel, []mattermost.Post{post}, conversation.Snapshot{}, true, time.Now())
 	if err != nil {
 		return true, err
 	}
-	if env.Anchor != prev.Anchor || len(msgs) != 1 || len(prev.Request.Files) != 1 || len(env.Request.Files) != 1 || env.Request.Files[0] != prev.Request.Files[0] {
+	if env.Anchor != post.ID || len(msgs) != 1 || len(prev.Request.Files) != 1 || len(env.Request.Files) != 1 || replacement == nil && (env.Anchor != prev.Anchor || env.Request.Files[0] != prev.Request.Files[0]) {
 		return true, errors.New("report input changed")
 	}
 	if e.Reserve != nil && !e.Reserve(key, w) {
@@ -215,14 +244,39 @@ func (e *Engine) continueReport(ctx context.Context, w config.Workflow, key conv
 		return true, errors.New("report audience changed")
 	}
 	env.Report = &nextStage
+	if !reportMethodInputBound(env, card) {
+		return true, errReportBinding
+	}
 	env.Predecessor = run.ID
 	env.AccessContext.InvocationID = env.Report.Invocation(key.Invocation(env.Anchor))
 	next := pending{Workflow: w, Envelope: env, Messages: msgs, Predecessor: run.ID, Channel: channel, TriggerPosts: []mattermost.Post{post}}
 	if err := corporateAssignment(&next); err != nil {
 		return true, err
 	}
+	if replacement != nil {
+		// Refuse a mismatched native upload before establishing a new method
+		// generation. Both consent posts are rechecked after this bounded read.
+		if _, err := e.readBoundFile(ctx, w, next.Envelope, env.Request.Files[0], replacement.To); err != nil {
+			return true, err
+		}
+	}
 	e.set(key, next)
 	return true, e.submit(ctx, key, next, nil, nil)
+}
+
+// The old hook printed this exact complete failure only after a non-zero child
+// exit and before accessing the outbox. A submitted result or a retriable exit
+// printed another line. A diagnostic replay has its own fresh identity and can
+// never grant another retry without a confirmed native checkpoint.
+func legacyCalculationFailure(env conversation.Envelope, r conversation.Run) bool {
+	s := env.Report
+	if s == nil || s.Number < 2 || s.Prior == nil || s.Attempt != 0 || s.Diagnostic || r.Status != "failed" || r.CancelRequested || r.FinishedAt == nil || len(r.Hooks) != 1 {
+		return false
+	}
+	h := r.Hooks[0]
+	return h.Name == "before_run" && h.Status == "failed" && h.Completeness == "complete" &&
+		h.StartedAt != nil && h.DeadlineAt != nil && h.FinishedAt != nil && h.FinishedAt.After(*h.StartedAt) && h.FinishedAt.Before(*h.DeadlineAt) &&
+		h.Output == "Mattermost file hook failed: stage=unknown; validation failed: report calculation did not finish this stage\n"
 }
 
 // The previous receiver treated a missing model deadline as an expired hook.
@@ -270,8 +324,11 @@ func (e *Engine) reportStop(ctx context.Context, w config.Workflow, env conversa
 	}
 	parts := delivery.Parts(env.Key(), r.SessionID, r.ID, "report-stop:"+r.ID, fmt.Sprintf("Этап %d остановился. Доставка нового файла не подтверждена. Последняя подтверждённая позиция сохранена.", env.Report.Number), env.Render, nil)
 	p.BeforeCreate = func(ctx context.Context) error {
-		post, err := e.MM.Post(ctx, env.Anchor)
-		if err != nil || post.UserID != a.Author.ID || post.Root() != env.Root || post.ChannelID != env.Channel || post.DeleteAt != 0 || !slices.Contains(env.Versions, conversation.PostVersion(post)) {
+		card, err := loadReportCard()
+		if err != nil {
+			return err
+		}
+		if _, err := e.reportCommand(ctx, card, env); err != nil {
 			return errors.New("report origin changed")
 		}
 		return e.confirmCorporate(ctx, a)

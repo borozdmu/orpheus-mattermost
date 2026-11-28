@@ -56,14 +56,9 @@ func Load() (Card, error) {
 	if err != nil {
 		return card, errors.New("report card unavailable")
 	}
-	defer func() { _ = f.Close() }()
-	st, statErr := f.Stat()
-	if statErr != nil || !st.Mode().IsRegular() || st.Mode().Perm()&0022 != 0 || st.Sys().(*syscall.Stat_t).Uid != 0 || st.Sys().(*syscall.Stat_t).Nlink != 1 {
-		return card, errors.New("report card untrusted")
-	}
-	raw, err := io.ReadAll(io.LimitReader(f, 4097))
-	if err != nil || len(raw) > 4096 {
-		return card, errors.New("invalid report card size")
+	raw, err := readCardFile(f)
+	if err != nil {
+		return card, err
 	}
 	if !exactJSONFields(raw, "schema", "job_id", "workflow", "channel_id", "root_post_id", "actor_id", "method_sha256", "source_id", "source_revision", "gateway_url") {
 		return card, errors.New("invalid report card fields")
@@ -74,6 +69,20 @@ func Load() (Card, error) {
 		return Card{}, errors.New("invalid report card")
 	}
 	return card, nil
+}
+
+// readCardFile takes ownership of an open file in a verified operator directory.
+func readCardFile(f *os.File) ([]byte, error) {
+	defer func() { _ = f.Close() }()
+	st, statErr := f.Stat()
+	if statErr != nil || !st.Mode().IsRegular() || st.Mode().Perm()&0022 != 0 || st.Sys().(*syscall.Stat_t).Uid != 0 || st.Sys().(*syscall.Stat_t).Nlink != 1 {
+		return nil, errors.New("report card untrusted")
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, 4097))
+	if err != nil || len(raw) > 4096 {
+		return nil, errors.New("invalid report card size")
+	}
+	return raw, nil
 }
 
 func (c Card) Valid() bool {
@@ -99,17 +108,50 @@ type Output struct {
 	Run      string `json:"run_id"`
 	Session  string `json:"session_id"`
 }
+
+// MethodRevision binds a single reviewed replacement to both real commands.
+type MethodRevision struct {
+	Approval       string `json:"approval_sha256"`
+	Original       string `json:"original_post_id"`
+	OriginalHash   string `json:"original_post_sha256"`
+	OriginalEdited int64  `json:"original_edit_at"`
+	Post           string `json:"approval_post_id"`
+	PostHash       string `json:"approval_post_sha256"`
+	File           string `json:"method_file_id"`
+	From           string `json:"from_sha256"`
+	To             string `json:"to_sha256"`
+	First          int    `json:"first_stage"`
+}
+
+func (u MethodRevision) valid(card Card) bool {
+	return u.First >= 2 && id.MatchString(u.Original) && id.MatchString(u.Post) && u.Post != u.Original &&
+		id.MatchString(u.File) && sha.MatchString(u.OriginalHash) && u.OriginalEdited >= 0 && sha.MatchString(u.PostHash) &&
+		sha.MatchString(u.Approval) && u.From == card.Method && sha.MatchString(u.To) && u.To != u.From
+}
+
+func (u MethodRevision) Approved(a MethodApproval, c Card) bool {
+	return u.valid(c) && a.Valid(c) && u.Approval == a.Digest() && u.From == a.From && u.To == a.To
+}
+
 type Stage struct {
-	Card     string  `json:"card_sha256"`
-	Job      string  `json:"job_id"`
-	Number   int     `json:"stage"`
-	Attempt  int     `json:"attempt,omitzero"`
-	RetryRun string  `json:"retry_run,omitzero"`
-	Prior    *Output `json:"previous,omitempty"`
+	Card       string          `json:"card_sha256"`
+	Job        string          `json:"job_id"`
+	Number     int             `json:"stage"`
+	Attempt    int             `json:"attempt,omitzero"`
+	Diagnostic bool            `json:"diagnostic_replay,omitzero"`
+	RetryRun   string          `json:"retry_run,omitzero"`
+	Prior      *Output         `json:"previous,omitempty"`
+	Method     *MethodRevision `json:"method_revision,omitempty"`
 }
 
 func (s Stage) Valid(c Card) bool {
 	if s.Card != c.Digest() || s.Job != c.Job || s.Number < 1 || s.Attempt < 0 || s.Attempt > 3 || s.Attempt == 0 && s.RetryRun != "" || s.Attempt > 0 && !GUID(s.RetryRun) {
+		return false
+	}
+	if s.Method != nil && (!s.Method.valid(c) || s.Number < s.Method.First || s.Diagnostic) {
+		return false
+	}
+	if s.Diagnostic && (s.Number < 2 || s.Attempt != 1) {
 		return false
 	}
 	if s.Number == 1 {
@@ -133,10 +175,18 @@ func (s Stage) Token(secret, invocation, assignment string, observed time.Time) 
 }
 
 func (s Stage) Invocation(anchor uuid.UUID) uuid.UUID {
+	if s.Method != nil {
+		b, _ := json.Marshal([]any{"orpheus.mattermost.method-invocation.v1", s.Job, s.Number, s.Method, s.Prior, s.Attempt, s.RetryRun})
+		return uuid.NewSHA1(anchor, b)
+	}
 	if s.Number == 1 && s.Attempt == 0 {
 		return anchor
 	}
-	b, _ := json.Marshal([]any{"orpheus.mattermost.report-invocation.v1", s.Job, s.Number, s.Prior, s.Attempt, s.RetryRun})
+	domain := "orpheus.mattermost.report-invocation.v1"
+	if s.Diagnostic {
+		domain = "orpheus.mattermost.report-diagnostic-invocation.v1"
+	}
+	b, _ := json.Marshal([]any{domain, s.Job, s.Number, s.Prior, s.Attempt, s.RetryRun})
 	return uuid.NewSHA1(anchor, b)
 }
 
@@ -145,7 +195,11 @@ func (s Stage) Manifest() map[string]any {
 	if s.Prior != nil {
 		previous, digest, position = s.Prior.Run, s.Prior.SHA, s.Prior.Position
 	}
-	return map[string]any{"schema": "orpheus.report-job.v1", "job_id": s.Job, "stage": s.Number, "previous_run": previous, "checkpoint_sha256": digest, "position": position}
+	manifest := map[string]any{"schema": "orpheus.report-job.v1", "job_id": s.Job, "stage": s.Number, "previous_run": previous, "checkpoint_sha256": digest, "position": position}
+	if s.Method != nil && s.Number == s.Method.First {
+		manifest["method_transition"] = map[string]string{"from_sha256": s.Method.From, "to_sha256": s.Method.To}
+	}
+	return manifest
 }
 
 func ValidToken(token, secret, job string, now time.Time) bool {

@@ -34,3 +34,35 @@ Stages may retry a verified pre-upload temporary failure after 1, 2 and
 4 minutes. The receiver checks the current grant each time. Without a
 confirmed checkpoint, workbook or safe retry witness, it sends one short
 technical stop notice subject to the original audience check.
+
+For an older calculation that stopped before accessing its outbox, the receiver
+recognizes the single complete pre-upload failure line from the old hook. It
+rechecks the previous native checkpoint and opens one diagnostic session for
+the same stage and position. Another diagnostic failure stops that stage. The
+child process reports only a predefined class of failure through its exit
+status. The hook records this as `report-calculation-v1` without copying the
+program's output, error text or input values. A confirmed new checkpoint
+resumes the normal sequence.
+
+
+## Approving a replacement program
+
+A separate root-owned, read-only JSON file at `MM_REPORT_METHOD_APPROVAL`
+pins one transition. Its fields are `schema`
+(`orpheus.mattermost.method-approval.v1`), `job_id`, `card_sha256`,
+`from_sha256`, `to_sha256` and `file_name`. The original job card remains
+in place. The same author attaches exactly that file to a new reply in the
+original thread with the following command.
+
+```text
+@<bot> /report-upgrade <job UUID> <old program SHA-256> <new program SHA-256>
+```
+
+The receiver waits for a confirmed checkpoint. If the latest stage failed
+before it submitted anything, the replacement can use its previous confirmed
+checkpoint. An indeterminate submission requires a native delivery receipt.
+A final workbook closes the job. The first stage of the new program, including
+a safe retry of that stage, receives `method_transition` with the old and new
+SHA-256. Subsequent stages use the new program normally. All restored bytes
+come from the verified bot receipt. The receiver checks the original command
+and approval reply again before material is released or the result is posted.

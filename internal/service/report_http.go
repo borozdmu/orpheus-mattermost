@@ -137,14 +137,8 @@ func (x *reportRequest) originCurrent(ctx context.Context) error {
 	if !reportHookActive(r, now) || x.assignment.Verify(os.Getenv("ORPHEUS_AUDIENCE_SECRET"), now) != nil {
 		return errReportWindow
 	}
-	post, err := x.e.MM.Post(ctx, x.env.Anchor)
-	if err != nil {
-		return err
-	}
-	if post.ID != x.env.Anchor || post.UserID != x.card.Actor || post.Root() != x.card.Thread || post.ChannelID != x.card.Channel || post.DeleteAt != 0 || !slices.Contains(x.env.Versions, conversation.PostVersion(post)) || !reportjob.MatchesCommand(post.Message, x.e.Bot.Username, x.card) {
-		return errReportOrigin
-	}
-	return nil
+	_, err = x.e.reportCommand(ctx, x.card, x.env)
+	return err
 }
 
 // Core starts the hook before it starts the model's execution deadline.
@@ -195,7 +189,11 @@ func (x *reportRequest) serve(ctx context.Context, w http.ResponseWriter, r *htt
 	var err error
 	switch {
 	case r.Method == "GET" && r.PathValue("action") == "method":
-		data, err = x.e.readBoundFile(ctx, x.w, x.env, x.env.Request.Files[0], x.card.Method)
+		method := x.card.Method
+		if x.env.Report.Method != nil {
+			method = x.env.Report.Method.To
+		}
+		data, err = x.e.readBoundFile(ctx, x.w, x.env, x.env.Request.Files[0], method)
 	case r.Method == "GET" && r.PathValue("action") == "checkpoint":
 		data, err = x.restore(ctx)
 	case r.Method == "POST" && r.PathValue("action") == "result":
@@ -265,61 +263,73 @@ func (e *Engine) reportReceipt(ctx context.Context, p *delivery.Publisher, env c
 
 func reportMessage(s *reportjob.Stage) string { return fmt.Sprintf("report:%s:%d", s.Job, s.Number) }
 
-func (x *reportRequest) restore(ctx context.Context) ([]byte, error) {
+func (x *reportRequest) checkpointReceipt(ctx context.Context, snap conversation.Snapshot, p *delivery.Publisher) (attachments.Artifact, error) {
+	var zero attachments.Artifact
 	prev := x.env.Report.Prior
 	if prev == nil || x.env.Report.Number < 2 || prev.Run == x.run.ID || prev.Session == x.run.SessionID {
-		return nil, errors.New("missing report checkpoint")
+		return zero, errors.New("missing report checkpoint")
 	}
+	for _, s := range snap.Sessions {
+		if s.ID != prev.Session || s.ExternalKey != x.env.Key().External() {
+			continue
+		}
+		for _, r := range s.Runs {
+			if r.ID != prev.Run || r.SessionID != s.ID || !r.Terminal() || r.CancelRequested {
+				continue
+			}
+			source, err := protectedContract(&s, &r, x.w, x.env.Key())
+			if err != nil || source.Report == nil || source.Report.Number+1 != x.env.Report.Number || !source.Report.Valid(x.card) || !sameReportLineage(source, x.env) || source.AccessContext.Subject != x.env.AccessContext.Subject || source.AccessProof.ProjectionDigest != x.env.AccessProof.ProjectionDigest || !slices.Equal(source.AccessProof.AudienceSubjects, x.env.AccessProof.AudienceSubjects) {
+				continue
+			}
+			if _, err := reportAssignment(source, x.card, x.e.SourceID); err != nil {
+				return zero, err
+			}
+			out, a, err := x.e.reportReceipt(ctx, p, source, r)
+			if err != nil {
+				return zero, err
+			}
+			if out == nil || *out != *prev || a.Name != reportjob.CheckpointName {
+				return zero, errors.New("predecessor receipt changed")
+			}
+			return a, nil
+		}
+	}
+	return zero, errors.New("predecessor unavailable")
+}
+
+func (x *reportRequest) restore(ctx context.Context) ([]byte, error) {
 	snap, err := x.e.API.Snapshot(ctx, x.env.Key())
 	if err != nil {
 		return nil, err
 	}
-	for _, s := range snap.Sessions {
-		if s.ID != prev.Session {
-			continue
-		}
-		for _, r := range s.Runs {
-			if r.ID != prev.Run || !r.Terminal() || r.CancelRequested {
-				continue
-			}
-			e, err := protectedContract(&s, &r, x.w, x.env.Key())
-			if err != nil || e.Report == nil || e.Report.Number+1 != x.env.Report.Number || !e.Report.Valid(x.card) || e.Anchor != x.env.Anchor || e.AccessContext.Subject != x.env.AccessContext.Subject || !slices.Equal(e.AccessProof.AudienceSubjects, x.env.AccessProof.AudienceSubjects) {
-				continue
-			}
-			p := &delivery.Publisher{MM: x.e.MM, Key: x.env.Key(), BotID: x.e.Bot.ID}
-			if err := p.Refresh(ctx); err != nil {
-				return nil, err
-			}
-			out, a, err := x.e.reportReceipt(ctx, p, e, r)
-			if err != nil {
-				return nil, err
-			}
-			if out == nil || *out != *prev || a.Name != reportjob.CheckpointName {
-				return nil, errors.New("predecessor receipt changed")
-			}
-			if err := x.permit(ctx, a.SHA256, "restore"); err != nil {
-				return nil, err
-			}
-			src, ok := x.e.MM.(interface {
-				Download(context.Context, string, int64) ([]byte, error)
-			})
-			if !ok {
-				return nil, errors.New("download unavailable")
-			}
-			data, err := src.Download(ctx, a.FileID, a.Size)
-			if err != nil {
-				return nil, err
-			}
-			if int64(len(data)) != a.Size || attachments.Hash(data) != a.SHA256 {
-				return nil, errors.New("checkpoint changed")
-			}
-			if err := x.permit(ctx, a.SHA256, "restore"); err != nil {
-				return nil, err
-			}
-			return data, nil
-		}
+	p := &delivery.Publisher{MM: x.e.MM, Key: x.env.Key(), BotID: x.e.Bot.ID}
+	if err := p.Refresh(ctx); err != nil {
+		return nil, err
 	}
-	return nil, errors.New("predecessor unavailable")
+	a, err := x.checkpointReceipt(ctx, snap, p)
+	if err != nil {
+		return nil, err
+	}
+	if err := x.permit(ctx, a.SHA256, "restore"); err != nil {
+		return nil, err
+	}
+	src, ok := x.e.MM.(interface {
+		Download(context.Context, string, int64) ([]byte, error)
+	})
+	if !ok {
+		return nil, errors.New("download unavailable")
+	}
+	data, err := src.Download(ctx, a.FileID, a.Size)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) != a.Size || attachments.Hash(data) != a.SHA256 {
+		return nil, errors.New("checkpoint changed")
+	}
+	if err := x.permit(ctx, a.SHA256, "restore"); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 func (x *reportRequest) finish(ctx context.Context, name string, data []byte, sha string) error {
